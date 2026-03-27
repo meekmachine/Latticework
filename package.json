@@ -1,0 +1,68 @@
+{
+  "name": "@lovelace_lol/latticework",
+  "version": "0.1.0",
+  "description": "Standalone Effect + Most.js reimplementation target for Latticework",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "effect": "^3.19.14",
+    "most": "^1.9.0",
+    "most-subject": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.9",
+    "@vitest/coverage-v8": "^3.2.4",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "keywords": [
+    "effect",
+    "most",
+    "mostjs",
+    "animation",
+    "lip-sync",
+    "tts",
+    "gaze",
+    "character-animation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meekmachine/Latticework.git"
+  },
+  "bugs": {
+    "url": "https://github.com/meekmachine/Latticework/issues"
+  },
+  "homepage": "https://github.com/meekmachine/Latticework#readme",
+  "author": "Jonathan",
+  "license": "MIT",
+  "packageManager": "npm@10.9.2"
+}
+
