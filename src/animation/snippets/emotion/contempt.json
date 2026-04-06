@@ -1,0 +1,62 @@
+{
+  "curves": {
+    "12": [
+      {
+        "time": 0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.4,
+        "intensity": 0.45
+      },
+      {
+        "time": 2.0,
+        "intensity": 0.45
+      },
+      {
+        "time": 2.5,
+        "intensity": 0.0
+      }
+    ],
+    "14": [
+      {
+        "time": 0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.4,
+        "intensity": 0.35
+      },
+      {
+        "time": 2.0,
+        "intensity": 0.35
+      },
+      {
+        "time": 2.5,
+        "intensity": 0.0
+      }
+    ],
+    "7": [
+      {
+        "time": 0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.4,
+        "intensity": 0.25
+      },
+      {
+        "time": 2.0,
+        "intensity": 0.25
+      },
+      {
+        "time": 2.5,
+        "intensity": 0.0
+      }
+    ]
+  },
+  "snippetBalance": 0.85,
+  "loop": false,
+  "snippetCategory": "auSnippet",
+  "snippetPriority": 5
+}

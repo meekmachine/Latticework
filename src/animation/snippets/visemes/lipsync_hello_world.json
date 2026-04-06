@@ -1,0 +1,177 @@
+{
+  "name": "lipsync:hello_world",
+  "description": "JALI-based lip-sync: 'hello world' - Natural conversational style",
+  "snippetCategory": "combined",
+  "snippetPriority": 50,
+  "snippetPlaybackRate": 1.0,
+  "snippetIntensityScale": 1.0,
+  "loop": false,
+  "maxTime": 0.75,
+  "jaliReference": "Edwards et al., SIGGRAPH 2016 - Jaw And Lip Integration model",
+  "jaliParameters": {
+    "jawActivation": 1.2,
+    "lipsyncIntensity": 1.0,
+    "speechStyle": "natural",
+    "description": "Standard conversational speech combining viseme morphs (0-14) and jaw AU (26)"
+  },
+  "curves": {
+    "14": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.01,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.04,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.05,
+        "intensity": 0.0
+      }
+    ],
+    "5": [
+      {
+        "time": 0.07,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.09,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.17,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.19,
+        "intensity": 0.0
+      }
+    ],
+    "12": [
+      {
+        "time": 0.21,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.23,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.27,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.29,
+        "intensity": 0.0
+      }
+    ],
+    "4": [
+      {
+        "time": 0.31,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.33,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.43,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.45,
+        "intensity": 0.0
+      }
+    ],
+    "1": [
+      {
+        "time": 0.5,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.52,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.56,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.58,
+        "intensity": 0.0
+      }
+    ],
+    "7": [
+      {
+        "time": 0.6,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.62,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.68,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.7,
+        "intensity": 0.0
+      }
+    ],
+    "26": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.03,
+        "intensity": 0.1
+      },
+      {
+        "time": 0.09,
+        "intensity": 0.35
+      },
+      {
+        "time": 0.19,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.23,
+        "intensity": 0.18
+      },
+      {
+        "time": 0.29,
+        "intensity": 0.18
+      },
+      {
+        "time": 0.33,
+        "intensity": 0.55
+      },
+      {
+        "time": 0.45,
+        "intensity": 0.55
+      },
+      {
+        "time": 0.5,
+        "intensity": 0.2
+      },
+      {
+        "time": 0.52,
+        "intensity": 0.3
+      },
+      {
+        "time": 0.62,
+        "intensity": 0.35
+      },
+      {
+        "time": 0.7,
+        "intensity": 0.0
+      }
+    ]
+  }
+}

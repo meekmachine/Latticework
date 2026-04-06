@@ -11,26 +11,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish_gate:
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.check.outputs.ready }}
-    steps:
-      - name: Check publish secret availability
-        id: check
-        run: |
-          if [ -z "${NPM_KEY:-}" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "NPM_KEY is not configured; publish jobs will be skipped."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          NPM_KEY: ${{ secrets.NPM_KEY }}
-
   prepare_release:
-    needs: publish_gate
-    if: "${{ needs.publish_gate.outputs.ready == 'true' && github.event_name == 'push' && github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'build: bump npm package version') }}"
+    if: "${{ github.event_name == 'push' && github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'build: bump npm package version') }}"
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -54,9 +36,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Bump patch version
         id: bump
         run: |
@@ -69,10 +48,8 @@ jobs:
           echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   publish:
-    if: "${{ needs.publish_gate.outputs.ready == 'true' && (github.event_name == 'workflow_dispatch' || needs.prepare_release.outputs.release_sha != '') }}"
-    needs:
-      - publish_gate
-      - prepare_release
+    if: "${{ always() && (github.event_name == 'workflow_dispatch' || needs.prepare_release.outputs.release_sha != '') }}"
+    needs: prepare_release
     runs-on: ubuntu-latest
     environment: npm
     permissions:
