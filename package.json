@@ -1,6 +1,6 @@
 {
   "name": "@lovelace_lol/latticework",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Standalone character runtime agencies extracted from LoomLarge",
   "type": "module",
   "main": "./dist/index.cjs",
