@@ -1,0 +1,217 @@
+{
+  "name": "lipsync_beautiful",
+  "description": "Word: 'beautiful' - /B Y UW T AH F AH L/",
+  "snippetCategory": "combined",
+  "snippetPriority": 50,
+  "snippetPlaybackRate": 1.0,
+  "snippetIntensityScale": 1.0,
+  "loop": false,
+  "curves": {
+    "11": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.02,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.03,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.05,
+        "intensity": 0.0
+      }
+    ],
+    "14": [
+      {
+        "time": 0.07,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.09,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.13,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.15,
+        "intensity": 0.0
+      }
+    ],
+    "5": [
+      {
+        "time": 0.17,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.19,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.29,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.31,
+        "intensity": 0.0
+      }
+    ],
+    "10": [
+      {
+        "time": 0.72,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.74,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.78,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.8,
+        "intensity": 0.0
+      }
+    ],
+    "3": [
+      {
+        "time": 0.4,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.42,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.48,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.5,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.6,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.62,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.68,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.7,
+        "intensity": 0.0
+      }
+    ],
+    "8": [
+      {
+        "time": 0.52,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.54,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.57,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.59,
+        "intensity": 0.0
+      }
+    ],
+    "26": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.02,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.09,
+        "intensity": 0.3
+      },
+      {
+        "time": 0.13,
+        "intensity": 0.3
+      },
+      {
+        "time": 0.17,
+        "intensity": 0.12
+      },
+      {
+        "time": 0.19,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.29,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.35,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.36,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.4,
+        "intensity": 0.24
+      },
+      {
+        "time": 0.42,
+        "intensity": 0.8
+      },
+      {
+        "time": 0.48,
+        "intensity": 0.8
+      },
+      {
+        "time": 0.54,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.57,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.6,
+        "intensity": 0.24
+      },
+      {
+        "time": 0.62,
+        "intensity": 0.8
+      },
+      {
+        "time": 0.68,
+        "intensity": 0.8
+      },
+      {
+        "time": 0.74,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.78,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.8,
+        "intensity": 0.0
+      }
+    ]
+  }
+}

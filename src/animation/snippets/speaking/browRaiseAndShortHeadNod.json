@@ -1,0 +1,72 @@
+{
+  "curves": {
+    "1": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.05,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.25,
+        "intensity": 0.6
+      },
+      {
+        "time": 0.45,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.6,
+        "intensity": 0.0
+      }
+    ],
+    "2": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.05,
+        "intensity": 0.2
+      },
+      {
+        "time": 0.25,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.45,
+        "intensity": 0.2
+      },
+      {
+        "time": 0.6,
+        "intensity": 0.0
+      }
+    ],
+    "M59": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.2,
+        "intensity": 0.05
+      },
+      {
+        "time": 0.4,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.6,
+        "intensity": 0.05
+      },
+      {
+        "time": 0.8,
+        "intensity": 0.0
+      }
+    ]
+  },
+  "loop": false,
+  "overallMaxTime": 0.8
+}

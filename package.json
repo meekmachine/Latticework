@@ -1,7 +1,7 @@
 {
   "name": "@lovelace_lol/latticework",
-  "version": "0.1.0",
-  "description": "Standalone Effect + Most.js reimplementation target for Latticework",
+  "version": "0.0.1",
+  "description": "Standalone character runtime agencies extracted from LoomLarge",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -22,8 +22,8 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
+    "build": "tsup",
+    "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -32,9 +32,11 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@lovelace_lol/loom3": "^1.0.30",
     "effect": "^3.19.14",
-    "most": "^1.9.0",
-    "most-subject": "^6.0.0"
+    "most-subject": "^6.0.0",
+    "rxjs": "^7.8.2",
+    "xstate": "^5.25.0"
   },
   "devDependencies": {
     "@types/node": "^25.0.9",
@@ -43,15 +45,24 @@
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },
+  "peerDependencies": {
+    "three": ">=0.170.0"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
   "keywords": [
-    "effect",
-    "most",
-    "mostjs",
     "animation",
-    "lip-sync",
-    "tts",
+    "avatar",
+    "character-animation",
+    "conversation",
     "gaze",
-    "character-animation"
+    "lip-sync",
+    "prosody",
+    "tts",
+    "xstate"
   ],
   "repository": {
     "type": "git",
@@ -65,4 +76,3 @@
   "license": "MIT",
   "packageManager": "npm@10.9.2"
 }
-

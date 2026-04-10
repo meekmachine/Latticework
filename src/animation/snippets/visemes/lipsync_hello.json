@@ -1,0 +1,117 @@
+{
+  "name": "lipsync_hello",
+  "description": "Word: 'hello' - /HH EH L OW/",
+  "snippetCategory": "combined",
+  "snippetPriority": 50,
+  "snippetPlaybackRate": 1.0,
+  "snippetIntensityScale": 1.0,
+  "loop": false,
+  "curves": {
+    "12": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.02,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.07,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.08,
+        "intensity": 0.0
+      }
+    ],
+    "4": [
+      {
+        "time": 0.1,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.12,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.22,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.24,
+        "intensity": 0.0
+      }
+    ],
+    "14": [
+      {
+        "time": 0.26,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.28,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.35,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.37,
+        "intensity": 0.0
+      }
+    ],
+    "8": [
+      {
+        "time": 0.39,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.42,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.54,
+        "intensity": 1.0
+      },
+      {
+        "time": 0.57,
+        "intensity": 0.0
+      }
+    ],
+    "26": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.08,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.12,
+        "intensity": 0.45
+      },
+      {
+        "time": 0.24,
+        "intensity": 0.45
+      },
+      {
+        "time": 0.28,
+        "intensity": 0.15
+      },
+      {
+        "time": 0.39,
+        "intensity": 0.2
+      },
+      {
+        "time": 0.42,
+        "intensity": 0.7
+      },
+      {
+        "time": 0.57,
+        "intensity": 0.0
+      }
+    ]
+  }
+}

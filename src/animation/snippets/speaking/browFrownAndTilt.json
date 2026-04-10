@@ -1,0 +1,42 @@
+{
+  "curves": {
+    "4": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.3,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.6,
+        "intensity": 0.4
+      },
+      {
+        "time": 0.9,
+        "intensity": 0.0
+      }
+    ],
+    "55": [
+      {
+        "time": 0.0,
+        "intensity": 0.0
+      },
+      {
+        "time": 0.2,
+        "intensity": 0.05
+      },
+      {
+        "time": 0.4,
+        "intensity": 0.05
+      },
+      {
+        "time": 0.7,
+        "intensity": 0.0
+      }
+    ]
+  },
+  "loop": false,
+  "overallMaxTime": 0.9
+}
