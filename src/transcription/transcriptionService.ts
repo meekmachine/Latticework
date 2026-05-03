@@ -11,6 +11,7 @@ import type {
   RecognitionResult,
   AgentSpeechEvent,
   BoundaryEvent,
+  InterruptionEvent,
 } from './types';
 import { DEFAULT_TRANSCRIPTION_CONFIG } from './types';
 
@@ -18,10 +19,26 @@ export class TranscriptionService {
   private config: Required<TranscriptionConfig>;
   private state: TranscriptionState;
   private callbacks: TranscriptionCallbacks;
+  private transcriptListeners = new Set<(transcript: string, isFinal: boolean) => void>();
+  private interruptionListeners = new Set<(event: InterruptionEvent) => void>();
 
   // Web Speech API
   private recognition: SpeechRecognition | null = null;
   private isManualStop = false;
+  private micStream: MediaStream | null = null;
+  private analysisContext: AudioContext | null = null;
+  private micAnalyser: AnalyserNode | null = null;
+  private micAnalyserData = new Uint8Array(1024);
+  private micSourceNode: MediaStreamAudioSourceNode | null = null;
+  private agentReferenceTrack: MediaStreamTrack | null = null;
+  private agentReferenceStream: MediaStream | null = null;
+  private agentAnalyser: AnalyserNode | null = null;
+  private agentAnalyserData = new Uint8Array(1024);
+  private agentSourceNode: MediaStreamAudioSourceNode | null = null;
+  private interruptionFrame: number | null = null;
+  private interruptionCandidateStart: number | null = null;
+  private interruptionLatched = false;
+  private lastInterruptionDebugAt = 0;
 
   // Agent speech filtering
   private agentWordSet = new Set<string>();
@@ -113,7 +130,7 @@ export class TranscriptionService {
           isFinal,
         });
 
-        this.callbacks.onTranscript?.(transcript, isFinal);
+        this.emitTranscript(transcript, isFinal);
       }
     };
 
@@ -164,12 +181,224 @@ export class TranscriptionService {
     console.log('[TranscriptionService] Auto-restarting recognition...');
 
     setTimeout(() => {
-      try {
-        this.recognition?.start();
-      } catch (err) {
+      void this.startRecognition().catch((err) => {
         console.warn('[TranscriptionService] Restart failed:', err);
-      }
+      });
     }, 100);
+  }
+
+  /**
+   * Acquire microphone stream and keep it for reuse.
+   */
+  private async ensureMicrophoneStream(): Promise<MediaStream> {
+    if (this.micStream) {
+      const liveTrack = this.micStream.getAudioTracks().find((track) => track.readyState === 'live');
+      if (liveTrack) {
+        return this.micStream;
+      }
+    }
+
+    const supported = navigator.mediaDevices.getSupportedConstraints?.() || {};
+    const audioConstraints: MediaTrackConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+
+    if ((supported as MediaTrackSupportedConstraints & { voiceIsolation?: boolean }).voiceIsolation) {
+      (audioConstraints as MediaTrackConstraints & { voiceIsolation?: boolean }).voiceIsolation = true;
+    }
+
+    console.log('[TranscriptionService] Requesting microphone permission...');
+    try {
+      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+    } catch (error) {
+      console.warn('[TranscriptionService] Enhanced mic constraints failed, retrying with plain audio:', error);
+      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    console.log('[TranscriptionService] Microphone permission granted');
+    await this.ensureMicrophoneAnalyser();
+    return this.micStream;
+  }
+
+  private async ensureAnalysisContext(): Promise<AudioContext> {
+    if (!this.analysisContext || this.analysisContext.state === 'closed') {
+      this.analysisContext = new AudioContext();
+    }
+
+    if (this.analysisContext.state === 'suspended') {
+      try {
+        await this.analysisContext.resume();
+      } catch (error) {
+        console.warn('[TranscriptionService] Failed to resume analysis context:', error);
+      }
+    }
+
+    return this.analysisContext;
+  }
+
+  private async ensureMicrophoneAnalyser(): Promise<void> {
+    const micStream = this.micStream;
+    if (!micStream) return;
+
+    const audioTrack = micStream.getAudioTracks()[0];
+    if (!audioTrack) return;
+
+    if (this.micSourceNode && this.micAnalyser && this.micSourceNode.mediaStream.getAudioTracks()[0] === audioTrack) {
+      return;
+    }
+
+    this.micSourceNode?.disconnect();
+    this.micAnalyser?.disconnect();
+
+    const analysisContext = await this.ensureAnalysisContext();
+    this.micSourceNode = analysisContext.createMediaStreamSource(micStream);
+    this.micAnalyser = analysisContext.createAnalyser();
+    this.micAnalyser.fftSize = 2048;
+    this.micAnalyser.smoothingTimeConstant = 0.65;
+    this.micSourceNode.connect(this.micAnalyser);
+    this.micAnalyserData = new Uint8Array(this.micAnalyser.fftSize);
+  }
+
+  private async updateAgentReferenceAnalyser(): Promise<void> {
+    this.agentSourceNode?.disconnect();
+    this.agentAnalyser?.disconnect();
+    this.agentSourceNode = null;
+    this.agentAnalyser = null;
+    this.agentReferenceStream = null;
+
+    if (!this.agentReferenceTrack) {
+      return;
+    }
+
+    const analysisContext = await this.ensureAnalysisContext();
+    this.agentReferenceStream = new MediaStream([this.agentReferenceTrack]);
+    this.agentSourceNode = analysisContext.createMediaStreamSource(this.agentReferenceStream);
+    this.agentAnalyser = analysisContext.createAnalyser();
+    this.agentAnalyser.fftSize = 2048;
+    this.agentAnalyser.smoothingTimeConstant = 0.65;
+    this.agentSourceNode.connect(this.agentAnalyser);
+    this.agentAnalyserData = new Uint8Array(this.agentAnalyser.fftSize);
+  }
+
+  private readLevel(analyser: AnalyserNode | null, data: Uint8Array): number {
+    if (!analyser) return 0;
+
+    (analyser as AnalyserNode & { getByteTimeDomainData: (array: Uint8Array) => void }).getByteTimeDomainData(
+      data as unknown as Uint8Array
+    );
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 1) {
+      const sample = ((data[i] ?? 128) - 128) / 128;
+      sum += sample * sample;
+    }
+
+    return Math.sqrt(sum / data.length);
+  }
+
+  private emitTranscript(transcript: string, isFinal: boolean): void {
+    this.callbacks.onTranscript?.(transcript, isFinal);
+    this.transcriptListeners.forEach((listener) => listener(transcript, isFinal));
+  }
+
+  private emitInterruption(event: InterruptionEvent): void {
+    this.callbacks.onInterruption?.(event);
+    this.interruptionListeners.forEach((listener) => listener(event));
+  }
+
+  public setAgentAudioReferenceTrack(track: MediaStreamTrack | null): void {
+    this.agentReferenceTrack = track;
+    void this.updateAgentReferenceAnalyser();
+  }
+
+  private startInterruptionMonitoring(): void {
+    if (!this.config.interruptDetectionEnabled) return;
+    if (this.interruptionFrame !== null) return;
+
+    const tick = () => {
+      if (!this.agentSpeakingActive) {
+        this.stopInterruptionMonitoring();
+        return;
+      }
+
+      const microphoneLevel = this.readLevel(this.micAnalyser, this.micAnalyserData);
+      const referenceLevel = this.readLevel(this.agentAnalyser, this.agentAnalyserData);
+      const requiredLevel = Math.max(
+        this.config.interruptionVolumeThreshold,
+        referenceLevel * this.config.interruptionReferenceScale + this.config.interruptionReferenceOffset
+      );
+      const shouldInterrupt = microphoneLevel >= requiredLevel;
+
+      if (this.config.interruptionDebugLogging) {
+        const now = performance.now();
+        if (now - this.lastInterruptionDebugAt >= 500) {
+          this.lastInterruptionDebugAt = now;
+          console.debug('[TranscriptionService] Interruption levels', {
+            microphoneLevel,
+            referenceLevel,
+            requiredLevel,
+            shouldInterrupt,
+          });
+        }
+      }
+
+      if (shouldInterrupt && !this.interruptionLatched) {
+        if (this.interruptionCandidateStart == null) {
+          this.interruptionCandidateStart = performance.now();
+        } else if (performance.now() - this.interruptionCandidateStart >= this.config.interruptionHoldMs) {
+          this.interruptionLatched = true;
+          const event: InterruptionEvent = {
+            timestamp: Date.now(),
+            microphoneLevel,
+            referenceLevel,
+            requiredLevel,
+          };
+          this.emitInterruption(event);
+        }
+      } else if (!shouldInterrupt) {
+        this.interruptionCandidateStart = null;
+      }
+
+      this.interruptionFrame = window.requestAnimationFrame(tick);
+    };
+
+    this.interruptionFrame = window.requestAnimationFrame(tick);
+  }
+
+  private stopInterruptionMonitoring(): void {
+    if (this.interruptionFrame !== null) {
+      window.cancelAnimationFrame(this.interruptionFrame);
+      this.interruptionFrame = null;
+    }
+    this.interruptionCandidateStart = null;
+  }
+
+  /**
+   * Start recognition, preferring the experimental audio-track path when available.
+   */
+  private async startRecognition(): Promise<void> {
+    if (!this.recognition) {
+      throw new Error('Recognition not initialized');
+    }
+
+    const micStream = await this.ensureMicrophoneStream();
+    const micTrack = micStream.getAudioTracks()[0];
+
+    if (!micTrack) {
+      throw new Error('No microphone audio track available');
+    }
+
+    try {
+      console.log('[TranscriptionService] Starting speech recognition with mic track...');
+      this.recognition.start(micTrack);
+    } catch (err) {
+      console.warn('[TranscriptionService] Track-based start failed, falling back to default start():', err);
+      this.recognition.start();
+    }
+
+    if (this.agentSpeakingActive) {
+      this.startInterruptionMonitoring();
+    }
   }
 
   /**
@@ -224,11 +453,8 @@ export class TranscriptionService {
       return;
     }
 
-    // Request microphone permission first
     try {
-      console.log('[TranscriptionService] Requesting microphone permission...');
-      await navigator.mediaDevices.getUserMedia({ audio: true });
-      console.log('[TranscriptionService] Microphone permission granted');
+      await this.ensureMicrophoneStream();
     } catch (err) {
       console.error('[TranscriptionService] Microphone permission denied:', err);
       this.setState({ status: 'error', error: 'Microphone permission denied' });
@@ -239,8 +465,7 @@ export class TranscriptionService {
     this.isManualStop = false;
 
     try {
-      console.log('[TranscriptionService] Starting speech recognition...');
-      this.recognition.start();
+      await this.startRecognition();
     } catch (err) {
       console.error('[TranscriptionService] Failed to start:', err);
       this.setState({ status: 'error', error: 'Failed to start recognition' });
@@ -280,6 +505,8 @@ export class TranscriptionService {
       case 'AGENT_START':
         // Agent starts speaking
         this.agentSpeakingActive = true;
+        this.interruptionLatched = false;
+        this.startInterruptionMonitoring();
         break;
 
       case 'WORD':
@@ -310,6 +537,8 @@ export class TranscriptionService {
         this.agentWordSet.clear();
         this.agentScriptStr = '';
         this.currentAgentWord = '';
+        this.interruptionLatched = false;
+        this.stopInterruptionMonitoring();
         break;
     }
   }
@@ -317,13 +546,20 @@ export class TranscriptionService {
   /**
    * Notify that agent is speaking (for echo filtering)
    */
-  public notifyAgentSpeech(text: string): void {
-    // Store agent script for filtering
+  public prepareAgentSpeech(text: string): void {
     this.agentWordSet.clear();
     const words = this.tokenizer(text);
     words.forEach((word) => this.agentWordSet.add(word));
     this.agentScriptStr = text.toLowerCase();
+    this.currentAgentWord = '';
+  }
+
+  public notifyAgentSpeech(text: string): void {
+    this.prepareAgentSpeech(text);
     this.agentSpeakingActive = true;
+    this.interruptionLatched = false;
+    this.interruptionCandidateStart = null;
+    this.startInterruptionMonitoring();
   }
 
   /**
@@ -335,6 +571,8 @@ export class TranscriptionService {
     this.agentWordSet.clear();
     this.agentScriptStr = '';
     this.currentAgentWord = '';
+    this.interruptionLatched = false;
+    this.stopInterruptionMonitoring();
   }
 
   /**
@@ -349,6 +587,20 @@ export class TranscriptionService {
       if (index > -1) {
         this.boundaryListeners.splice(index, 1);
       }
+    };
+  }
+
+  public onTranscript(listener: (transcript: string, isFinal: boolean) => void): () => void {
+    this.transcriptListeners.add(listener);
+    return () => {
+      this.transcriptListeners.delete(listener);
+    };
+  }
+
+  public onInterruption(listener: (event: InterruptionEvent) => void): () => void {
+    this.interruptionListeners.add(listener);
+    return () => {
+      this.interruptionListeners.delete(listener);
     };
   }
 
@@ -386,7 +638,20 @@ export class TranscriptionService {
    */
   public dispose(): void {
     this.stopListening();
+    this.stopInterruptionMonitoring();
+    this.micStream?.getTracks().forEach((track) => track.stop());
+    this.micStream = null;
+    this.micSourceNode?.disconnect();
+    this.micAnalyser?.disconnect();
+    this.agentSourceNode?.disconnect();
+    this.agentAnalyser?.disconnect();
+    if (this.analysisContext) {
+      void this.analysisContext.close();
+      this.analysisContext = null;
+    }
     this.boundaryListeners = [];
+    this.transcriptListeners.clear();
+    this.interruptionListeners.clear();
     this.recognition = null;
   }
 }
