@@ -13,7 +13,8 @@ import type {
   TTSState,
   TimelineEvent,
   SAPIResponse,
-  VisemeID
+  VisemeID,
+  SpeakResult,
 } from './types';
 import {
   parseTokens,
@@ -59,11 +60,16 @@ export class TTSService {
   // Audio playback
   private audioContext: AudioContext | null = null;
   private audioSource: AudioBufferSourceNode | null = null;
+  private playbackReferenceDestination: MediaStreamAudioDestinationNode | null = null;
 
   // Timeline execution
   private timelineTimeouts: number[] = [];
   private timelineStartTime: number = 0;
   private speechToken: number = 0;
+  private currentSpeechResolve: ((result: SpeakResult) => void) | null = null;
+  private currentSpeechPromise: Promise<SpeakResult> | null = null;
+  private currentSpeechSettled = false;
+  private playbackStartListeners = new Set<() => void>();
 
   // Lip sync services (managed internally)
   private lipSyncService: LipSyncServiceAPI | null = null;
@@ -184,7 +190,7 @@ export class TTSService {
    */
   private async initSAPI(): Promise<void> {
     // Create audio context for playback
-    this.audioContext = new AudioContext();
+    this.ensureAudioContext();
   }
 
   /**
@@ -245,7 +251,7 @@ export class TTSService {
   /**
    * Speak text
    */
-  public async speak(text: string): Promise<void> {
+  public async speak(text: string): Promise<SpeakResult> {
     // Stop current speech
     this.stop();
 
@@ -258,8 +264,10 @@ export class TTSService {
     if (!sanitizedText) {
       console.warn('No text to speak after parsing');
       this.setState({ status: 'idle' });
-      return;
+      return { interrupted: false };
     }
+
+    const speechCompletion = this.beginSpeechLifecycle();
 
     try {
       if (this.config.engine === 'webSpeech') {
@@ -271,11 +279,58 @@ export class TTSService {
       } else {
         throw new Error(`Unsupported TTS engine: ${this.config.engine}`);
       }
+      return await speechCompletion;
     } catch (error) {
+      this.finishSpeechLifecycle({ interrupted: false });
       console.error('TTS error:', error);
       this.setState({ status: 'error', error: (error as Error).message });
       this.callbacks.onError?.(error as Error);
+      throw error;
     }
+  }
+
+  private beginSpeechLifecycle(): Promise<SpeakResult> {
+    this.currentSpeechSettled = false;
+    this.currentSpeechPromise = new Promise<SpeakResult>((resolve) => {
+      this.currentSpeechResolve = resolve;
+    });
+    return this.currentSpeechPromise;
+  }
+
+  private finishSpeechLifecycle(result: SpeakResult): void {
+    if (this.currentSpeechSettled) return;
+    this.currentSpeechSettled = true;
+    const resolve = this.currentSpeechResolve;
+    this.currentSpeechResolve = null;
+    this.currentSpeechPromise = null;
+    resolve?.(result);
+  }
+
+  public getPlaybackReferenceTrack(): MediaStreamTrack | null {
+    return this.playbackReferenceDestination?.stream.getAudioTracks()[0] ?? null;
+  }
+
+  public onPlaybackStart(listener: () => void): () => void {
+    this.playbackStartListeners.add(listener);
+    return () => {
+      this.playbackStartListeners.delete(listener);
+    };
+  }
+
+  private emitPlaybackStart(): void {
+    this.callbacks.onStart?.();
+    this.playbackStartListeners.forEach((listener) => listener());
+  }
+
+  private ensureAudioContext(): AudioContext {
+    if (!this.audioContext || this.audioContext.state === 'closed') {
+      this.audioContext = new AudioContext();
+      this.playbackReferenceDestination = this.audioContext.createMediaStreamDestination();
+    } else if (!this.playbackReferenceDestination) {
+      this.playbackReferenceDestination = this.audioContext.createMediaStreamDestination();
+    }
+
+    return this.audioContext;
   }
 
   /**
@@ -313,7 +368,7 @@ export class TTSService {
     // Set up event handlers
     this.utterance.onstart = () => {
       this.setState({ status: 'speaking' });
-      this.callbacks.onStart?.();
+      this.emitPlaybackStart();
       this.executeTimeline(timeline);
 
       // Start lip sync - sentence-level for experimental vocal, legacy for lipSyncService
@@ -329,6 +384,7 @@ export class TTSService {
       this.setState({ status: 'idle' });
       this.callbacks.onEnd?.();
       this.clearTimelineTimeouts();
+      this.finishSpeechLifecycle({ interrupted: false });
 
       // End lip sync
       if (this.config.useExperimentalVocal && this.vocalService) {
@@ -343,6 +399,7 @@ export class TTSService {
       this.setState({ status: 'error', error: event.error });
       this.callbacks.onError?.(new Error(event.error));
       this.clearTimelineTimeouts();
+      this.finishSpeechLifecycle({ interrupted: false });
 
       // Stop lip sync on error
       if (this.config.useExperimentalVocal && this.vocalService) {
@@ -411,7 +468,14 @@ export class TTSService {
     // Create audio source
     this.audioSource = this.audioContext.createBufferSource();
     this.audioSource.buffer = audioBuffer;
-    this.audioSource.connect(this.audioContext.destination);
+
+    const outputGain = this.audioContext.createGain();
+    outputGain.gain.value = this.config.volume;
+    this.audioSource.connect(outputGain);
+    outputGain.connect(this.audioContext.destination);
+    if (this.playbackReferenceDestination) {
+      outputGain.connect(this.playbackReferenceDestination);
+    }
 
     // Reset word index
     this.wordIndex = 0;
@@ -421,6 +485,7 @@ export class TTSService {
       this.setState({ status: 'idle' });
       this.callbacks.onEnd?.();
       this.clearTimelineTimeouts();
+      this.finishSpeechLifecycle({ interrupted: false });
 
       // End lip sync
       if (this.config.useExperimentalVocal && this.vocalService) {
@@ -432,8 +497,6 @@ export class TTSService {
 
     // Start playback
     this.setState({ status: 'speaking' });
-    this.callbacks.onStart?.();
-    this.executeTimeline(timeline);
 
     // Start lip sync - sentence-level for experimental vocal, legacy for lipSyncService
     if (this.config.useExperimentalVocal && this.vocalService) {
@@ -444,6 +507,8 @@ export class TTSService {
     }
 
     this.audioSource.start();
+    this.emitPlaybackStart();
+    this.executeTimeline(timeline);
   }
 
   /**
@@ -453,9 +518,7 @@ export class TTSService {
     text: string,
     emojis: Array<{ emoji: string; index: number }>
   ): Promise<void> {
-    if (!this.audioContext || this.audioContext.state === 'closed') {
-      this.audioContext = new AudioContext();
-    }
+    const audioContext = this.ensureAudioContext();
 
     const speechToken = this.speechToken;
     const backendUrl = this.config.backendUrl || requireBackendBaseUrl();
@@ -503,7 +566,7 @@ export class TTSService {
     const result: AzureTTSSynthesizeResponse = await response.json();
     if (speechToken !== this.speechToken) return;
 
-    const audioBuffer = await decodeBase64Audio(result.audio_base64, this.audioContext);
+    const audioBuffer = await decodeBase64Audio(result.audio_base64, audioContext);
     if (speechToken !== this.speechToken) return;
 
     const durationSec = Number.isFinite(audioBuffer.duration) && audioBuffer.duration > 0
@@ -513,14 +576,17 @@ export class TTSService {
     this.setState({ currentTimeline: timeline });
 
     // Create audio source
-    this.audioSource = this.audioContext.createBufferSource();
+    this.audioSource = audioContext.createBufferSource();
     this.audioSource.buffer = audioBuffer;
 
     // Apply volume via gain node
-    const gainNode = this.audioContext.createGain();
+    const gainNode = audioContext.createGain();
     gainNode.gain.value = this.config.volume;
     this.audioSource.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
+    gainNode.connect(audioContext.destination);
+    if (this.playbackReferenceDestination) {
+      gainNode.connect(this.playbackReferenceDestination);
+    }
 
     // Reset word index
     this.wordIndex = 0;
@@ -533,11 +599,8 @@ export class TTSService {
       this.clearTimelineTimeouts();
       this.endExternalSpeech();
       this.audioSource = null;
+      this.finishSpeechLifecycle({ interrupted: false });
     };
-
-    // Start playback
-    this.setState({ status: 'speaking' });
-    this.callbacks.onStart?.();
 
     // Start experimental Azure lip sync from Azure visemes when available.
     // Fall back to text-derived sentence timing so the new Vocal path still animates
@@ -558,14 +621,16 @@ export class TTSService {
       this.config.animationAgency.setSnippetTime(snippetName, 0);
     }
 
-    this.clearTimelineTimeouts();
-    this.executeTimeline(timeline);
-
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
     }
 
+    // Start playback
+    this.setState({ status: 'speaking' });
     this.audioSource.start();
+    this.emitPlaybackStart();
+    this.clearTimelineTimeouts();
+    this.executeTimeline(timeline);
   }
 
   private buildAzureTimeline(
@@ -709,6 +774,7 @@ export class TTSService {
    */
   public stop(): void {
     this.speechToken += 1;
+    const hadActiveSpeech = this.state.status === 'speaking' || this.state.status === 'loading' || !!this.audioSource || !!this.utterance;
 
     if (this.config.engine === 'webSpeech' && this.synthesis) {
       this.synthesis.cancel();
@@ -732,6 +798,9 @@ export class TTSService {
 
     this.clearTimelineTimeouts();
     this.setState({ status: 'idle' });
+    if (hadActiveSpeech) {
+      this.finishSpeechLifecycle({ interrupted: true });
+    }
   }
 
   /**
@@ -915,6 +984,7 @@ export class TTSService {
   public dispose(): void {
     this.stop();
     this.disposeLipSync();
+    this.playbackStartListeners.clear();
 
     if (this.audioContext) {
       this.audioContext.close();

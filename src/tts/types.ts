@@ -103,6 +103,10 @@ export interface TTSCallbacks {
   onResume?: () => void;
 }
 
+export interface SpeakResult {
+  interrupted: boolean;
+}
+
 export interface ParsedTokens {
   text: string;
   emojis: Array<{ emoji: string; index: number }>;

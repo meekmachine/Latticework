@@ -14,6 +14,8 @@ export interface ConversationConfig {
   detectInterruptions?: boolean;
   /** Minimum time (ms) agent must speak before interruption is allowed */
   minSpeakTime?: number;
+  /** Optional legacy text fallback for browsers where audio interruption is unavailable */
+  allowTranscriptInterruptionFallback?: boolean;
   /** Optional eye/head tracking service for natural gaze coordination */
   eyeHeadTracking?: EyeHeadTrackingService;
   /** Optional prosodic service for speech-synchronized gestures (brow raises, head nods) */
@@ -31,7 +33,7 @@ export interface ConversationCallbacks {
   onError?: (error: Error) => void;
 }
 
-export type ConversationState = 'idle' | 'agentSpeaking' | 'userSpeaking' | 'processing';
+export type ConversationState = 'idle' | 'agentSpeaking' | 'interrupted' | 'userSpeaking' | 'processing';
 
 export interface ConversationContext {
   state: ConversationState;
@@ -56,11 +58,14 @@ export interface ConversationServiceAPI {
   getState: () => ConversationContext;
   /** Send user input programmatically (for testing/debugging) */
   submitUserInput: (text: string) => void;
+  /** Cleanup subscriptions and stop the conversation */
+  dispose: () => void;
 }
 
 export const DEFAULT_CONVERSATION_CONFIG = {
   autoListen: true,
   detectInterruptions: true,
   minSpeakTime: 500, // 500ms
+  allowTranscriptInterruptionFallback: false,
   eyeHeadTracking: undefined,
 };

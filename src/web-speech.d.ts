@@ -32,7 +32,7 @@ interface SpeechRecognition extends EventTarget {
   interimResults: boolean;
   maxAlternatives: number;
 
-  start(): void;
+  start(audioTrack?: MediaStreamTrack): void;
   stop(): void;
   abort(): void;
 

@@ -34,6 +34,7 @@ export type {
   AIExpressionSnippetMetadata,
   CurvePoint,
   EasingType,
+  MixerLoopMode,
   NormalizedSnippet,
   Snippet,
 } from './animation/types';

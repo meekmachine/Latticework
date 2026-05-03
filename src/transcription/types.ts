@@ -9,6 +9,12 @@ export interface TranscriptionConfig {
   interimResults?: boolean;
   maxAlternatives?: number;
   agentFilteringEnabled?: boolean;
+  interruptDetectionEnabled?: boolean;
+  interruptionDebugLogging?: boolean;
+  interruptionVolumeThreshold?: number;
+  interruptionReferenceScale?: number;
+  interruptionReferenceOffset?: number;
+  interruptionHoldMs?: number;
 }
 
 export interface TranscriptionState {
@@ -24,6 +30,7 @@ export interface TranscriptionCallbacks {
   onEnd?: () => void;
   onError?: (error: Error) => void;
   onBoundary?: (event: BoundaryEvent) => void;
+  onInterruption?: (event: InterruptionEvent) => void;
 }
 
 export interface BoundaryEvent {
@@ -31,6 +38,13 @@ export interface BoundaryEvent {
   index: number;
   timestamp: number;
   speaker: 'user' | 'agent';
+}
+
+export interface InterruptionEvent {
+  timestamp: number;
+  microphoneLevel: number;
+  referenceLevel: number;
+  requiredLevel: number;
 }
 
 export interface RecognitionResult {
@@ -57,4 +71,10 @@ export const DEFAULT_TRANSCRIPTION_CONFIG: Required<TranscriptionConfig> = {
   interimResults: true,
   maxAlternatives: 1,
   agentFilteringEnabled: true,
+  interruptDetectionEnabled: true,
+  interruptionDebugLogging: false,
+  interruptionVolumeThreshold: 0.035,
+  interruptionReferenceScale: 0.45,
+  interruptionReferenceOffset: 0.015,
+  interruptionHoldMs: 150,
 };
