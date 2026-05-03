@@ -39,6 +39,8 @@ export type {
   TTSCallbacks,
   TTSState,
   TTSEngine,
+  WebSpeechReferenceMode,
+  PlaybackReferenceStatus,
   VisemeID,
   TimelineEvent,
   WordTimelineItem,
@@ -46,6 +48,7 @@ export type {
   EmojiTimelineItem,
   PhonemeTimelineItem,
   SAPIResponse,
+  SpeakResult,
   ParsedTokens
 } from './types';
 export {
