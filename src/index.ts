@@ -153,13 +153,18 @@ export type {
   EmojiTimelineItem,
   ParsedTokens,
   PhonemeTimelineItem,
+  PlaybackReferenceStatus,
+  SAPIResponse,
+  SpeakResult,
   TimelineEvent,
   TTSCallbacks,
   TTSConfig,
   TTSEngine,
   TTSState,
   TTSVoice,
+  VisemeID,
   VisemeTimelineItem,
+  WebSpeechReferenceMode,
   WordTimelineItem,
 } from './tts';
 
