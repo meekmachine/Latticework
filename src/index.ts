@@ -89,16 +89,26 @@ export type {
 } from './hair/types';
 
 export {
+  AZURE_TO_CC4_VISEME,
+  azureVisemesToTimeline,
   LipSyncService,
   createLipSyncService,
   lipSyncMachine,
   LipSyncScheduler,
   VisemeMapper,
+  mapAzureVisemeIdToCC4,
+  normalizeAzureVisemes,
   visemeMapper,
   PhonemeExtractor,
   phonemeExtractor,
   VISEME_NAMES,
 } from './lipsync';
+export type {
+  AzureTimelineOptions,
+  AzureVisemeLike,
+  AzureWordTimingLike,
+  NormalizedAzureViseme,
+} from './lipsync/azureVisemeMapping';
 export type {
   LipSyncServiceAPI,
   LipSyncHostCaps,
@@ -163,6 +173,8 @@ export {
 export type {
   VocalConfig,
   VocalSnippet,
+  VocalTimeline,
+  VocalWordTiming,
   VocalState,
   WordTiming,
 } from './vocal';

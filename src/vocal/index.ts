@@ -36,6 +36,9 @@ export type {
   VisemeId,
   VisemeEvent,
   WordTiming,
+  VocalSource,
+  VocalTimeline,
+  VocalWordTiming,
   VocalConfig,
   VocalState,
 } from './types';

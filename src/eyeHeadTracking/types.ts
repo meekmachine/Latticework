@@ -54,6 +54,7 @@ export interface EyeHeadTrackingConfig {
   webcamLookAtUser?: boolean; // Make character look at user's face position
   webcamActivationInterval?: number; // How often to activate webcam tracking (ms)
   engine?: any; // EngineThree for applying gaze directly
+  cameraController?: any; // DPthreeCameraController for camera-relative gaze offsets
   animationAgency?: any; // Animation agency for scheduling approach
   useAnimationAgency?: boolean; // Toggle: true = use animation agency, false = use direct engine calls
   agencyTransitionDuration?: number; // Duration for animation agency transitions (ms)

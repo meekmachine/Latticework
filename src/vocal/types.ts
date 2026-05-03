@@ -2,14 +2,7 @@
  * Vocal Agency Types
  *
  * Type definitions for lip sync and vocal animation.
- * Uses the canonical 15-slot viseme order matching the existing VisemeMapper.
- *
- * Canonical viseme reference:
- *   0 = EE       5 = U        10 = S_Z
- *   1 = Ah       6 = W        11 = B_M_P
- *   2 = Oh       7 = L        12 = K_G_H_NG
- *   3 = OO       8 = F_V      13 = AE
- *   4 = I        9 = Th       14 = R
+ * Uses the canonical 15-slot viseme order exported by @lovelace_lol/loom3.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,6 +27,7 @@ export interface VocalSnippet {
   snippetPlaybackRate: number;
   snippetIntensityScale: number;
   snippetJawScale?: number;
+  autoVisemeJaw?: boolean;
   loop: boolean;
   maxTime: number;
   curves: Record<string, AnimationCurve>;
@@ -58,6 +52,26 @@ export interface WordTiming {
   word: string;
   startMs: number;
   durationMs: number;
+}
+
+/** Source that produced the vocal timeline */
+export type VocalSource = 'text' | 'azure' | 'livekit' | 'webSpeech';
+
+/** Word timing aligned to a full utterance timeline */
+export interface VocalWordTiming {
+  word: string;
+  startSec: number;
+  endSec: number;
+}
+
+/** Full utterance timeline used by the Vocal runtime */
+export interface VocalTimeline {
+  name?: string;
+  text?: string;
+  visemes: VisemeEvent[];
+  wordTimings?: VocalWordTiming[];
+  durationSec?: number;
+  source?: VocalSource;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

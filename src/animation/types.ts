@@ -140,6 +140,7 @@ export type Snippet = {
    * - 2.0 = exaggerated jaw movement
    */
   snippetJawScale?: number;
+  autoVisemeJaw?: boolean;
 
   /**
    * Global left/right balance for bilateral AUs in this snippet.
@@ -207,6 +208,7 @@ export type NormalizedSnippet = {
   snippetPriority: number;
   snippetBlendMode: 'replace' | 'additive';  // Blend mode for AU combination
   snippetJawScale: number;  // Jaw bone activation multiplier for viseme snippets
+  autoVisemeJaw?: boolean;  // Explicitly enable/disable Loom3 auto-generated viseme jaw
   snippetBalance: number;  // Global L/R balance for bilateral AUs (-1 to +1)
   snippetBalanceMap: Record<string, number>;  // Per-AU balance overrides
   snippetEasing: EasingType;  // Easing function for keyframe interpolation

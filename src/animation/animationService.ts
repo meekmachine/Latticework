@@ -91,6 +91,7 @@ const EYE_HEAD_IDS = {
 };
 
 const isNumericId = (value: string) => /^[0-9]+$/.test(value);
+const VISEME_SLOT_COUNT = 15;
 
 function normalizeCurves(
   input?: Record<string, Array<{ t?: number; v?: number; time?: number; intensity?: number; inherit?: boolean }>>,
@@ -166,6 +167,7 @@ function normalizeSnippet(sn: any): NormalizedSnippet {
     snippetIntensityScale: typeof sn?.snippetIntensityScale === 'number' ? sn.snippetIntensityScale : 1,
     snippetBlendMode: sn?.snippetBlendMode ?? 'replace',
     snippetJawScale: typeof sn?.snippetJawScale === 'number' ? sn.snippetJawScale : 1.0,
+    autoVisemeJaw: typeof sn?.autoVisemeJaw === 'boolean' ? sn.autoVisemeJaw : undefined,
     snippetBalance: typeof sn?.snippetBalance === 'number' ? sn.snippetBalance : 0,
     snippetBalanceMap: sn?.snippetBalanceMap ?? {},
     snippetCategory: sn?.snippetCategory ?? 'default',
@@ -255,6 +257,7 @@ function buildClipCurves(
   sn: NormalizedSnippet,
   getCurrentValue: (curveId: string) => number,
   loopMode: 'once' | 'repeat' | 'pingpong',
+  host?: Engine,
 ) {
   const clipCurves: Record<string, Array<{ time: number; intensity: number }>> = {};
 
@@ -294,7 +297,78 @@ function buildClipCurves(
     clipCurves[curveId] = applyInherit(curveId, arr);
   }
 
+  mergeDuplicateVisemeMorphCurves(clipCurves, sn, host);
   return clipCurves;
+}
+
+function mergeCurveMax(
+  curves: Array<Array<{ time: number; intensity: number }>>
+): Array<{ time: number; intensity: number }> {
+  const times = new Set<number>();
+
+  curves.forEach((curve) => {
+    curve.forEach((frame) => {
+      if (Number.isFinite(frame.time)) {
+        times.add(Math.round(frame.time * 1000) / 1000);
+      }
+    });
+  });
+
+  const sorted = Array.from(times).sort((a, b) => a - b);
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const start = sorted[i];
+    const end = sorted[i + 1];
+    if (end - start <= 0.12) {
+      times.add(Math.round(((start + end) / 2) * 1000) / 1000);
+    }
+  }
+
+  return Array.from(times)
+    .sort((a, b) => a - b)
+    .map((time) => ({
+      time,
+      intensity: Math.max(...curves.map((curve) => sampleCurveAt(curve, time))),
+    }));
+}
+
+function mergeDuplicateVisemeMorphCurves(
+  curves: Record<string, Array<{ time: number; intensity: number }>>,
+  sn: NormalizedSnippet,
+  host?: Engine,
+): void {
+  const useVisemeCategory = sn.snippetCategory === 'visemeSnippet' || sn.snippetCategory === 'combined';
+  if (!useVisemeCategory || !host || typeof host.getProfile !== 'function') return;
+
+  const visemeKeys = host.getProfile()?.visemeKeys;
+  if (!Array.isArray(visemeKeys) || visemeKeys.length === 0) return;
+
+  const morphGroups = new Map<string, string[]>();
+  Object.keys(curves).forEach((curveId) => {
+    if (!isNumericId(curveId)) return;
+    const index = Number(curveId);
+    if (index < 0 || index >= Math.min(VISEME_SLOT_COUNT, visemeKeys.length)) return;
+
+    const morphRef = visemeKeys[index];
+    if (typeof morphRef !== 'string' && typeof morphRef !== 'number') return;
+    const groupKey = `${typeof morphRef}:${morphRef}`;
+    const group = morphGroups.get(groupKey) ?? [];
+    group.push(curveId);
+    morphGroups.set(groupKey, group);
+  });
+
+  morphGroups.forEach((curveIds) => {
+    if (curveIds.length <= 1) return;
+
+    const sortedIds = [...curveIds].sort((a, b) => Number(a) - Number(b));
+    const representative = sortedIds[0];
+    curves[representative] = mergeCurveMax(
+      sortedIds.map((curveId) => curves[curveId]).filter(Boolean)
+    );
+
+    sortedIds.slice(1).forEach((curveId) => {
+      delete curves[curveId];
+    });
+  });
 }
 
 function clampTime(time: number, duration: number) {
@@ -481,7 +555,7 @@ export function createAnimationService(host: Engine) {
     const playbackRate = snippet.snippetPlaybackRate ?? 1;
     const reverse = !!snippet.mixerReverse;
     const signedRate = reverse ? -playbackRate : playbackRate;
-    const clipCurves = buildClipCurves(snippet, getCurrentValue, loopMode);
+    const clipCurves = buildClipCurves(snippet, getCurrentValue, loopMode, host);
     const useVisemeCategory = snippet.snippetCategory === 'visemeSnippet' || snippet.snippetCategory === 'combined';
     const snippetCategory = useVisemeCategory ? 'visemeSnippet' : undefined;
     const hasJawCurve = Object.prototype.hasOwnProperty.call(snippet.curves || {}, '26');

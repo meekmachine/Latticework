@@ -16,6 +16,18 @@ export type { LipSyncSchedulerConfig } from './lipSyncScheduler';
 // Utilities
 export { VisemeMapper, visemeMapper } from './VisemeMapper';
 export { PhonemeExtractor, phonemeExtractor } from './PhonemeExtractor';
+export {
+  AZURE_TO_CC4_VISEME,
+  azureVisemesToTimeline,
+  mapAzureVisemeIdToCC4,
+  normalizeAzureVisemes,
+} from './azureVisemeMapping';
+export type {
+  AzureTimelineOptions,
+  AzureVisemeLike,
+  AzureWordTimingLike,
+  NormalizedAzureViseme,
+} from './azureVisemeMapping';
 
 // Types
 export type {

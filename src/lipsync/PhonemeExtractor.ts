@@ -84,18 +84,13 @@ export class PhonemeExtractor {
 
     if (!tokens || tokens.length === 0) return phonemes;
 
-    tokens.forEach((token, index) => {
-      if (token.match(/[\s,]/)) {
+    tokens.forEach((token) => {
+      if (/^\s+$/.test(token) || /^[,.;:!?]$/.test(token)) {
         phonemes.push(this.getPauseForChar(token));
       } else {
         // Convert word to phonemes using letter patterns
         const wordPhonemes = this.wordToPhonemes(token);
         phonemes.push(...wordPhonemes);
-      }
-
-      // Add a pause if the token is not the last one
-      if (index < tokens.length - 1) {
-        phonemes.push(this.getPauseForChar(' '));
       }
     });
 
@@ -140,10 +135,16 @@ export class PhonemeExtractor {
         return 'PAUSE_SPACE';
       case ',':
         return 'PAUSE_COMMA';
+      case ';':
+        return 'PAUSE_SEMICOLON';
+      case ':':
+        return 'PAUSE_COLON';
       case '.':
-      case '!':
-      case '?':
         return 'PAUSE_PERIOD';
+      case '?':
+        return 'PAUSE_QUESTION';
+      case '!':
+        return 'PAUSE_EXCLAMATION';
       default:
         return 'PAUSE_SPACE';
     }
@@ -154,8 +155,7 @@ export class PhonemeExtractor {
    */
   private tokenize(text: string): string[] {
     if (!text) return [];
-    // Split on whitespace, keep words
-    return text.split(/\s+/).filter(token => token.length > 0);
+    return text.match(/[a-z]+|[,.;:!?]|\s+/gi) ?? [];
   }
 }
 

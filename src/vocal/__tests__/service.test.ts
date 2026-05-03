@@ -68,4 +68,42 @@ describe('VocalService word-boundary sync', () => {
     expect(seek).toHaveBeenCalledWith('snippet', 0.25);
     service.dispose();
   });
+
+  it('starts external timelines with provider word timings for drift correction', () => {
+    const seek = vi.fn();
+    const scheduled: any[] = [];
+    const service = new VocalService({
+      animationAgency: {
+        schedule: (snippet) => {
+          scheduled.push(snippet);
+          return snippet.name;
+        },
+        remove: vi.fn(),
+        seek,
+      },
+    });
+
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+
+    const name = service.startTimeline({
+      name: 'azure_test_timeline',
+      text: 'hello',
+      source: 'azure',
+      durationSec: 1.2,
+      visemes: [
+        { visemeId: 1, offsetMs: 0, durationMs: 300 },
+      ],
+      wordTimings: [
+        { word: 'hello', startSec: 0.2, endSec: 0.5 },
+      ],
+    });
+
+    expect(name).toBe('azure_test_timeline');
+    expect(scheduled[0].maxTime).toBe(1.2);
+
+    service.onWordBoundary('hello', 0, 0.34);
+
+    expect(seek).toHaveBeenCalledWith('azure_test_timeline', 0.34);
+    service.dispose();
+  });
 });

@@ -4,6 +4,15 @@
  */
 
 export type TTSEngine = 'webSpeech' | 'sapi' | 'azure';
+export type WebSpeechReferenceMode = 'none' | 'displayMedia';
+export type PlaybackReferenceStatus =
+  | 'unavailable'
+  | 'requesting'
+  | 'available'
+  | 'denied'
+  | 'failed'
+  | 'no-audio'
+  | 'ended';
 
 export type VisemeID = number; // 0-20 for ARKit/FACS visemes
 
@@ -13,6 +22,7 @@ export interface TTSConfig {
   pitch?: number; // 0.0 - 2.0
   volume?: number; // 0.0 - 1.0
   voiceName?: string;
+  lang?: string;
   /** Backend base URL for server TTS (Azure, etc.) */
   backendUrl?: string;
   /** Optional Azure Speech credentials (overrides backend env) */
@@ -21,8 +31,8 @@ export interface TTSConfig {
   /** Optional Azure voice style config */
   azureStyle?: string;
   azureStyleDegree?: number | null;
-  /** Use experimental Vocal service for lip sync (Effect/MostJS based) */
-  useExperimentalVocal?: boolean;
+  /** Experimental reference capture for browser-native Web Speech TTS */
+  webSpeechReferenceMode?: WebSpeechReferenceMode;
   /** Lip sync intensity multiplier */
   lipsyncIntensity?: number;
   /** Jaw scale multiplier */
@@ -90,6 +100,7 @@ export interface TTSState {
   currentText?: string;
   currentTimeline?: TimelineEvent[];
   currentVoice?: TTSVoice;
+  playbackReferenceStatus?: PlaybackReferenceStatus;
   error?: string;
 }
 
@@ -101,6 +112,7 @@ export interface TTSCallbacks {
   onError?: (error: Error) => void;
   onPause?: () => void;
   onResume?: () => void;
+  onPlaybackReferenceStatusChange?: (status: PlaybackReferenceStatus) => void;
 }
 
 export interface SpeakResult {
