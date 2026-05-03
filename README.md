@@ -8,7 +8,7 @@ This repo is the package home for the current runtime code. The embedded LoomLar
 
 - `Effect` for state, lifecycle, orchestration, and service composition
 - `Most.js` for transport/event streams and observable-style flows
-- package the current runtime code so it can be versioned, tested, and published independently
+- stable package contracts that let LoomLarge adopt the external package before the internals are fully rebuilt
 
 ## Vision
 
@@ -35,25 +35,11 @@ In the longer-term design, `Effect` should own service composition, resource man
 
 That means this package should eventually expose a set of composable agencies and runtime interfaces that LoomLarge can assemble, rather than another tightly-coupled application-specific stack.
 
-## Vision
-
-Latticework should become a library of collaborating agencies, not a single animation manager. Each agency owns a narrow part of character behavior, publishes and consumes clear streams of intent, and delegates execution to a shared runtime.
-
-The target agency model includes:
-
-- animation/runtime for clip execution, priority, blending, and continuity
-- TTS for speech generation and speech-timed coordination
-- vocal/lip-sync for visemes, jaw motion, and spoken phrase timing
-- prosodic for emphasis, phrasing, and speech-driven expression
-- blink for autonomous eye behavior
-- gaze / eye-head tracking for attention and target following
-- conversation / transcription for higher-level orchestration across interactive flows
-
-This follows the direction already explored in LoomLarge: higher-level coordinators should compose specialized agencies instead of embedding speech, gaze, prosody, lip-sync, and animation scheduling into one application-specific service.
-
 ## Strategy
 
-The strategy is to rebuild Latticework as a standalone package with a small public surface first, then migrate LoomLarge onto that package through adapters. The new implementation should use `Effect` for state, service composition, resource management, and cancellation. It should use `Most.js` for event transport, time-based streams, fan-out, and observable-style inputs.
+The near-term strategy is to make the external package real and usable first. The current runtime can act as a migration bridge while LoomLarge starts depending on `@lovelace_lol/latticework` through a small adapter layer.
+
+The longer-term strategy is to replace the internals behind stable package contracts. New modules should be rebuilt around `Effect` services and `Most.js` streams, with the existing LoomLarge behavior used as reference material and parity fixtures.
 
 The important boundary is ownership. Agencies should decide what they want to express. The runtime should decide how simultaneous agency outputs become coherent animation.
 
@@ -64,14 +50,16 @@ The important boundary is ownership. Agencies should decide what they want to ex
 - makes agency ownership explicit, so lip-sync, gaze, blink, prosody, and TTS do not keep rewriting each other's state
 - gives LoomLarge a gradual adoption path through adapters instead of one high-risk replacement
 - makes timing bugs easier to reproduce because streams, agency decisions, and runtime output can be tested separately
+- lets the package boundary stabilize before the internal Effect and Most.js rewrite is complete
 
 ## Challenges
 
 - the current LoomLarge implementation mixes old scheduler logic, XState, RxJS, and newer stream-based ideas, so the boundaries need to be rediscovered carefully
 - timing behavior is user-visible and fragile, especially for lip-sync, jaw motion, gaze, and speech-driven expression
-- a clean-room rewrite can drift from working behavior unless we build parity fixtures and migration tests early
+- a clean reimplementation can drift from working behavior unless we build parity fixtures and migration tests early
 - agencies can conflict unless priority, ownership, blending, and cancellation rules are part of the core runtime contract
 - package extraction adds release discipline, API stability, and migration overhead before it pays off
+- carrying the extracted runtime for too long would preserve the architectural problems this package is meant to fix
 
 ## How We Make It Better
 
@@ -79,9 +67,10 @@ The important boundary is ownership. Agencies should decide what they want to ex
 - build golden fixtures from LoomLarge scenarios for TTS, lip-sync, gaze, blink, and prosody before replacing behavior
 - keep each agency independently testable with deterministic clocks and stream fixtures
 - expose a small adapter layer for LoomLarge so migration can happen one agency at a time
-- avoid copying code from `frontend/src/latticework`; use the old implementation as behavioral reference only
+- avoid copying more code from `frontend/src/latticework`; use the old implementation as behavioral reference for new modules
 - document every public API with ownership rules: who may emit, who may consume, and who resolves conflicts
 - make observability part of the package, including trace events for agency input, agency decisions, and runtime output
+- track which exported modules are bridge code and which modules have been rebuilt around the target architecture
 
 ## Current Status
 
