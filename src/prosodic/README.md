@@ -358,10 +358,10 @@ prosodic/
 
 | Feature | Animation Agency | Prosodic Agency |
 |---------|------------------|-----------------|
-| **State Machine** | ✅ `animationMachine.ts` | ✅ `prosodicMachine.ts` |
-| **Scheduler** | ✅ `animationScheduler.ts` | ✅ `prosodicScheduler.ts` |
+| **State Machine** | Runtime owned by Loom3 | ✅ `prosodicMachine.ts` |
+| **Scheduler** | Runtime owned by Loom3 | ✅ `prosodicScheduler.ts` |
 | **Service Factory** | ✅ `createAnimationService()` | ✅ `createProsodicService()` |
-| **XState-Based** | ✅ Yes | ✅ Yes |
+| **XState-Based** | ❌ Stream adapter | ✅ Yes |
 | **Multiple Channels** | ✅ Many snippets | ✅ 2 channels (brow/head) |
 | **Looping** | ✅ Per-snippet | ✅ Always looping |
 | **Fade-Out** | ❌ No | ✅ Gradual fade |

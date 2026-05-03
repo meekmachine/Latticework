@@ -7,7 +7,11 @@
 
 // ============ Core Event Types ============
 
-import type { MixerLoopMode, EasingType } from './types';
+import type {
+  MixerLoopMode,
+  EasingType,
+  BakedClipChannelInfo,
+} from './types';
 
 interface AnimationEventBase {
   timestamp: number;
@@ -30,6 +34,12 @@ export interface SnippetPlayStateChangedEvent extends AnimationEventBase {
   type: 'SNIPPET_PLAY_STATE_CHANGED';
   snippetName: string;
   isPlaying: boolean;
+}
+
+/** Emitted when a snippet's authored data changes (curves/metadata) */
+export interface SnippetUpdatedEvent extends AnimationEventBase {
+  type: 'SNIPPET_UPDATED';
+  snippetName: string;
 }
 
 /** Emitted when a snippet completes a loop iteration */
@@ -108,16 +118,19 @@ export interface BakedAnimationUIState {
   loopMode: MixerLoopMode;
   reverse: boolean;
   repeatCount?: number;
+  requestedBlendMode: 'replace' | 'additive';
   blendMode: 'replace' | 'additive';
   balance: number;
   category: 'baked';
   easing: EasingType;
+  channels: BakedClipChannelInfo[];
 }
 
 /** Info about an available baked animation clip */
 export interface BakedClipInfo {
   name: string;
   duration: number;
+  channels?: BakedClipChannelInfo[];
 }
 
 /** Emitted when baked animation clips are loaded from a model */
@@ -157,7 +170,7 @@ export interface BakedAnimationCompletedEvent extends AnimationEventBase {
   clipName: string;
 }
 
-/** Emitted periodically with baked animation progress (throttled) */
+/** Emitted for explicit baked-animation seek/scrub progress updates */
 export interface BakedAnimationProgressEvent extends AnimationEventBase {
   type: 'BAKED_ANIMATION_PROGRESS';
   clipName: string;
@@ -189,6 +202,7 @@ export type AnimationEvent =
   | SnippetAddedEvent
   | SnippetRemovedEvent
   | SnippetPlayStateChangedEvent
+  | SnippetUpdatedEvent
   | SnippetLoopedEvent
   | SnippetCompletedEvent
   | KeyframeCompletedEvent
@@ -217,6 +231,8 @@ export interface SnippetUIState {
   loopMode: MixerLoopMode;
   reverse: boolean;
   repeatCount?: number;
+  loopIteration?: number;
+  loopDirection?: 1 | -1;
   currentTime: number;
   duration: number;
   playbackRate: number;
