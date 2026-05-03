@@ -425,10 +425,10 @@ lipsync/
 
 | Feature | Animation Agency | Prosodic Agency | LipSync Agency |
 |---------|-----------------|-----------------|----------------|
-| **State Machine** | ✅ `animationMachine.ts` | ✅ `prosodicMachine.ts` | ✅ `lipSyncMachine.ts` |
-| **Scheduler** | ✅ `animationScheduler.ts` | ✅ `prosodicScheduler.ts` | ✅ `lipSyncScheduler.ts` |
+| **State Machine** | Runtime owned by Loom3 | ✅ `prosodicMachine.ts` | ✅ `lipSyncMachine.ts` |
+| **Scheduler** | Runtime owned by Loom3 | ✅ `prosodicScheduler.ts` | ✅ `lipSyncScheduler.ts` |
 | **Service Factory** | ✅ `createAnimationService()` | ✅ `createProsodicService()` | ✅ `createLipSyncService()` |
-| **XState-Based** | ✅ Yes | ✅ Yes | ✅ Yes |
+| **XState-Based** | ❌ Stream adapter | ✅ Yes | ✅ Yes |
 | **Multiple Channels** | ✅ Many snippets | ✅ 2 channels (brow/head) | ✅ Per-word snippets |
 | **Word Boundary** | ❌ No | ✅ Pulse timing | ✅ Word processing |
 | **Jaw Coordination** | ❌ No | ❌ No | ✅ AU 26 sync |

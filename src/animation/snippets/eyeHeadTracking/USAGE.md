@@ -258,4 +258,4 @@ For smooth circular paths, use sine/cosine-like curves:
 
 - [COMPOSITE_MOTION_GUIDE.md](../../../../../COMPOSITE_MOTION_GUIDE.md) - Full guide to composite motion system
 - [MIX_WEIGHT_SYSTEM.md](../../../../../MIX_WEIGHT_SYSTEM.md) - How mix weights work
-- [animationScheduler.ts](../../animationScheduler.ts) - Scheduler implementation
+- [animationService.ts](../../animationService.ts) - Loom3-backed snippet playback service

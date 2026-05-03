@@ -41,6 +41,26 @@ export const EASING_FUNCTIONS: Record<EasingType, (t: number) => number> = {
 // ---------- Mixer blending (AnimationMixer) ----------
 export type MixerBlendMode = 'replace' | 'additive' | 'crossfade' | 'fade' | 'warp';
 
+export type BakedClipChannel = 'face' | 'body' | 'scene';
+
+export interface BakedClipChannelInfo {
+  channel: BakedClipChannel;
+  trackCount: number;
+  playable: boolean;
+  blendMode?: 'replace' | 'additive';
+}
+
+export type BakedRuntimeClipInfo = {
+  name: string;
+  duration: number;
+  channels?: BakedClipChannelInfo[];
+};
+
+export type BakedRuntimeAnimationState = AnimationState & {
+  requestedBlendMode?: 'replace' | 'additive';
+  channels?: BakedClipChannelInfo[];
+};
+
 export type MixerBlendConfig = {
   mixerChannel?: string;              // Logical channel (body/head/face/eyes/etc.)
   mixerBlendMode?: MixerBlendMode;    // How this snippet should blend on the channel
@@ -68,6 +88,13 @@ export type AIExpressionInterpretationMetadata = {
   explanation: string;
   emotion?: string | null;
   notesByAu?: Record<string, string>;
+  summary?: string;
+  phases?: Array<{ title: string; description: string }>;
+  characterDetailsUsed?: string[];
+  eyeNote?: string | null;
+  headNote?: string | null;
+  pacingNote?: string | null;
+  handoffNote?: string | null;
 };
 
 export type AIExpressionSnippetMetadata = {
@@ -171,6 +198,7 @@ export type NormalizedSnippet = {
   loop: boolean;
   aiExpressionMetadata?: AIExpressionSnippetMetadata;
   loopIteration: number;
+  loopDirection: 1 | -1;
   lastLoopTime: number;
 
   snippetPlaybackRate: number;
@@ -310,10 +338,10 @@ export type ScheduleOpts = {
  * Used by animation service to control baked animations from GLB/GLTF files.
  */
 export interface BakedAnimationEngine {
-  getAnimationClips(): Array<{ name: string; duration: number }>;
-  getPlayingAnimations(): AnimationState[];
+  getAnimationClips(): BakedRuntimeClipInfo[];
+  getPlayingAnimations(): BakedRuntimeAnimationState[];
   playAnimation(clipName: string, options?: AnimationPlayOptions): {
-    getState: () => AnimationState;
+    getState: () => BakedRuntimeAnimationState;
     finished: Promise<void>;
   } | null;
   stopAnimation(clipName: string): void;

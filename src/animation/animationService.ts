@@ -1,11 +1,19 @@
 import { Subject, Observable } from 'rxjs';
 import { filter, map, distinctUntilChanged, throttleTime, shareReplay } from 'rxjs/operators';
-import type { Engine, ScheduleOpts, NormalizedSnippet, BakedAnimationEngine, EasingType, MixerLoopMode } from './types';
-import { AnimationRuntime, type AnimationRuntimeEvents } from './animationRuntime';
+import type {
+  Engine,
+  ScheduleOpts,
+  NormalizedSnippet,
+  BakedAnimationEngine,
+  BakedRuntimeAnimationState,
+  EasingType,
+  MixerLoopMode,
+  ClipHandle,
+} from './types';
+import { isRuntimeDebugEnabled } from '../config/runtimeDebug';
 import type {
   AnimationEvent,
   SnippetUIState,
-  KeyframeCompletedEvent,
   GlobalPlaybackChangedEvent,
   BakedClipInfo,
   BakedAnimationUIState,
@@ -15,30 +23,650 @@ import type {
   BakedAnimationProgressEvent,
 } from './animationEvents';
 
+type ClipStreamEvent =
+  | {
+      type: 'keyframe';
+      clipName: string;
+      keyframeIndex: number;
+      totalKeyframes: number;
+      currentTime: number;
+      duration: number;
+      iteration: number;
+    }
+  | {
+      type: 'loop';
+      clipName: string;
+      iteration: number;
+      currentTime: number;
+      duration: number;
+    }
+  | {
+      type: 'seek';
+      clipName: string;
+      currentTime: number;
+      duration: number;
+      iteration: number;
+    }
+  | {
+      type: 'completed';
+      clipName: string;
+      currentTime: number;
+      duration: number;
+      iteration: number;
+    };
+
+type StreamClipHandle = ClipHandle & {
+  subscribe?: (listener: (event: ClipStreamEvent) => void) => () => void;
+};
+
+type RuntimeSched = {
+  name: string;
+  startsAt: number;
+  offset: number;
+  enabled: boolean;
+};
+
+type SchedulerCurvePoint = {
+  time: number;
+  intensity: number;
+  inherit?: boolean;
+};
+
+type PlaybackRunner = {
+  snippetName: string;
+  active: boolean;
+  paused: boolean;
+  clipHandle?: StreamClipHandle;
+  unsubscribeClipEvents?: () => void;
+  stopPromise: Promise<void>;
+  stopResolve: () => void;
+  seekTime?: number;
+};
+
+const EYE_HEAD_IDS = {
+  yawNeg: '61',
+  yawPos: '62',
+  pitchPos: '63',
+  pitchNeg: '64',
+};
+
+const isNumericId = (value: string) => /^[0-9]+$/.test(value);
+
+function normalizeCurves(
+  input?: Record<string, Array<{ t?: number; v?: number; time?: number; intensity?: number; inherit?: boolean }>>,
+): Record<string, SchedulerCurvePoint[]> {
+  const out: Record<string, SchedulerCurvePoint[]> = {};
+  if (!input) return out;
+  for (const [key, arr] of Object.entries(input)) {
+    const safe = Array.isArray(arr) ? arr : [];
+    const norm = safe.map((point: any) => ({
+      time: typeof point.time === 'number' ? point.time : (typeof point.t === 'number' ? point.t : 0),
+      intensity: typeof point.intensity === 'number' ? point.intensity : (typeof point.v === 'number' ? point.v : 0),
+      inherit: !!point.inherit,
+    }));
+    norm.sort((a, b) => a.time - b.time);
+    out[key] = norm;
+  }
+  return out;
+}
+
+function calculateDuration(curves: Record<string, SchedulerCurvePoint[]>): number {
+  if (!curves || !Object.keys(curves).length) return 0;
+  let maxTime = 0;
+  for (const arr of Object.values(curves)) {
+    if (arr.length > 0) {
+      const lastTime = arr[arr.length - 1].time;
+      if (lastTime > maxTime) maxTime = lastTime;
+    }
+  }
+  return maxTime;
+}
+
+function normalizeSnippet(sn: any): NormalizedSnippet {
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  let curves: Record<string, SchedulerCurvePoint[]> = {};
+
+  if (sn?.curves) {
+    curves = normalizeCurves(sn.curves);
+  } else {
+    const mapped: Record<string, SchedulerCurvePoint[]> = {};
+    (sn?.au ?? []).forEach((point: any) => {
+      const key = String(point.id);
+      (mapped[key] ||= []).push({
+        time: point.t ?? point.time ?? 0,
+        intensity: point.v ?? point.intensity ?? 0,
+        inherit: !!point.inherit,
+      });
+    });
+    (sn?.viseme ?? []).forEach((point: any) => {
+      const key = String(point.key);
+      (mapped[key] ||= []).push({
+        time: point.t ?? point.time ?? 0,
+        intensity: point.v ?? point.intensity ?? 0,
+        inherit: !!point.inherit,
+      });
+    });
+    Object.values(mapped).forEach((arr) => arr.sort((a, b) => a.time - b.time));
+    curves = mapped;
+  }
+
+  const duration = calculateDuration(curves);
+  const mixerLoopMode = sn?.mixerLoopMode ?? (sn?.loop ? 'repeat' : 'once');
+
+  return {
+    name: sn?.name ?? `sn_${Date.now()}`,
+    curves,
+    isPlaying: !!sn?.isPlaying,
+    loop: mixerLoopMode !== 'once',
+    aiExpressionMetadata: sn?.aiExpressionMetadata ?? undefined,
+    loopIteration: typeof sn?.loopIteration === 'number' ? sn.loopIteration : 0,
+    loopDirection: sn?.loopDirection === -1 ? -1 : (sn?.mixerReverse ? -1 : 1),
+    lastLoopTime: typeof sn?.lastLoopTime === 'number' ? sn.lastLoopTime : 0,
+    snippetPlaybackRate: typeof sn?.snippetPlaybackRate === 'number' ? sn.snippetPlaybackRate : 1,
+    snippetIntensityScale: typeof sn?.snippetIntensityScale === 'number' ? sn.snippetIntensityScale : 1,
+    snippetBlendMode: sn?.snippetBlendMode ?? 'replace',
+    snippetJawScale: typeof sn?.snippetJawScale === 'number' ? sn.snippetJawScale : 1.0,
+    snippetBalance: typeof sn?.snippetBalance === 'number' ? sn.snippetBalance : 0,
+    snippetBalanceMap: sn?.snippetBalanceMap ?? {},
+    snippetCategory: sn?.snippetCategory ?? 'default',
+    snippetPriority: typeof sn?.snippetPriority === 'number' ? sn.snippetPriority : 0,
+    snippetEasing: sn?.snippetEasing ?? 'linear',
+    mixerChannel: sn?.mixerChannel,
+    mixerBlendMode: sn?.mixerBlendMode,
+    mixerWeight: sn?.mixerWeight,
+    mixerFadeDurationMs: sn?.mixerFadeDurationMs,
+    mixerWarpDurationMs: sn?.mixerWarpDurationMs,
+    mixerTimeScale: sn?.mixerTimeScale,
+    mixerLoopMode,
+    mixerRepeatCount: typeof sn?.mixerRepeatCount === 'number' ? sn.mixerRepeatCount : undefined,
+    mixerClampWhenFinished: sn?.mixerClampWhenFinished,
+    mixerAdditive: sn?.mixerAdditive,
+    mixerReverse: !!sn?.mixerReverse,
+    currentTime: typeof sn?.currentTime === 'number' ? sn.currentTime : 0,
+    startWallTime: typeof sn?.startWallTime === 'number' ? sn.startWallTime : now,
+    duration,
+    cursor: sn?.cursor ?? {},
+  };
+}
+
+function sampleCurveAt(arr: SchedulerCurvePoint[], t: number) {
+  if (!arr.length) return 0;
+  if (t <= arr[0].time) return arr[0].intensity ?? 0;
+  const last = arr[arr.length - 1];
+  if (t >= last.time) return last.intensity ?? 0;
+  for (let i = 0; i < arr.length - 1; i++) {
+    const a = arr[i];
+    const b = arr[i + 1];
+    if (t >= a.time && t <= b.time) {
+      const dt = Math.max(1e-6, b.time - a.time);
+      const p = (t - a.time) / dt;
+      return (a.intensity ?? 0) + ((b.intensity ?? 0) - (a.intensity ?? 0)) * p;
+    }
+  }
+  return last.intensity ?? 0;
+}
+
+function eyeHeadUsesInheritedStart(sn: NormalizedSnippet) {
+  if (sn.snippetCategory !== 'eyeHeadTracking') return false;
+  return Object.values(sn.curves || {}).some((arr) => !!arr?.[0]?.inherit);
+}
+
+function getEyeHeadSeekTime(
+  sn: NormalizedSnippet,
+  getCurrentValue: (curveId: string) => number,
+) {
+  const { yawNeg, yawPos, pitchPos, pitchNeg } = EYE_HEAD_IDS;
+  const curves = sn.curves || {};
+  const yawNegCurve = curves[yawNeg];
+  const yawPosCurve = curves[yawPos];
+  const pitchPosCurve = curves[pitchPos];
+  const pitchNegCurve = curves[pitchNeg];
+
+  if (!yawNegCurve || !yawPosCurve || !pitchPosCurve || !pitchNegCurve) return undefined;
+
+  const times = new Set<number>();
+  [yawNegCurve, yawPosCurve, pitchPosCurve, pitchNegCurve].forEach((arr) => {
+    arr.forEach((kf) => times.add(kf.time));
+  });
+  const samples = Array.from(times).sort((a, b) => a - b);
+  if (!samples.length) return undefined;
+
+  const currentYaw = getCurrentValue(yawPos) - getCurrentValue(yawNeg);
+  const currentPitch = getCurrentValue(pitchPos) - getCurrentValue(pitchNeg);
+
+  let bestTime = samples[0];
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const t of samples) {
+    const yaw = sampleCurveAt(yawPosCurve, t) - sampleCurveAt(yawNegCurve, t);
+    const pitch = sampleCurveAt(pitchPosCurve, t) - sampleCurveAt(pitchNegCurve, t);
+    const dYaw = yaw - currentYaw;
+    const dPitch = pitch - currentPitch;
+    const dist = dYaw * dYaw + dPitch * dPitch;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestTime = t;
+    }
+  }
+
+  return bestTime;
+}
+
+function buildClipCurves(
+  sn: NormalizedSnippet,
+  getCurrentValue: (curveId: string) => number,
+  loopMode: 'once' | 'repeat' | 'pingpong',
+) {
+  const clipCurves: Record<string, Array<{ time: number; intensity: number }>> = {};
+
+  const applyInherit = (
+    curveId: string,
+    arr: Array<{ time: number; intensity: number; inherit?: boolean }>,
+  ) => {
+    const baseCurve = arr.map(({ time, intensity }) => ({ time, intensity }));
+    if (!arr.length) return baseCurve;
+    const first = arr[0];
+
+    if (sn.snippetCategory === 'eyeHeadTracking') {
+      if (first?.inherit) {
+        const base = getCurrentValue(curveId);
+        const next = baseCurve.slice();
+        next[0] = { ...next[0], intensity: base };
+        return next;
+      }
+      if (loopMode !== 'once' && baseCurve.length > 1) {
+        const firstIntensity = baseCurve[0].intensity;
+        const lastIdx = baseCurve.length - 1;
+        if (Math.abs(baseCurve[lastIdx].intensity - firstIntensity) > 1e-4) {
+          baseCurve[lastIdx] = { ...baseCurve[lastIdx], intensity: firstIntensity };
+        }
+      }
+      return baseCurve;
+    }
+
+    if (!first?.inherit) return baseCurve;
+
+    const base = getCurrentValue(curveId);
+    const offset = base - (first.intensity ?? 0);
+    return arr.map(({ time, intensity }) => ({ time, intensity: (intensity ?? 0) + offset }));
+  };
+
+  for (const [curveId, arr] of Object.entries(sn.curves || {})) {
+    clipCurves[curveId] = applyInherit(curveId, arr);
+  }
+
+  return clipCurves;
+}
+
+function clampTime(time: number, duration: number) {
+  if (!Number.isFinite(time)) return 0;
+  if (!Number.isFinite(duration) || duration <= 0) return Math.max(0, time);
+  return Math.max(0, Math.min(duration, time));
+}
+
 /**
  * Animation Service
  *
- * This service wraps the animation runtime and exposes a stable API
- * for UI components and other services.
+ * This service uses Loom3 clip handles as the runtime source of truth and
+ * keeps only snippet metadata and UI state locally.
  */
 export function createAnimationService(host: Engine) {
-  const runtimeEvents: AnimationRuntimeEvents = {
-    onSnippetCompleted: (name) => animationEventEmitter.emitSnippetCompleted(name),
-    onPlayStateChanged: (name, isPlaying) => animationEventEmitter.emitPlayStateChanged(name, isPlaying),
-    onKeyframeCompleted: (data) => animationEventEmitter.emitKeyframeCompleted(data),
+  let snippets: NormalizedSnippet[] = [];
+  const sched = new Map<string, RuntimeSched>();
+  const playbackRunners = new Map<string, PlaybackRunner>();
+  let playing = false;
+  let disposed = false;
+
+  animationEventEmitter.setSnippetAccessor(() => snippets);
+
+  const getSnippet = (name: string) => snippets.find((entry) => entry.name === name) ?? null;
+
+  const ensureSched = (name: string) => {
+    if (!sched.has(name)) {
+      sched.set(name, { name, startsAt: 0, offset: 0, enabled: true });
+    }
+    return sched.get(name)!;
   };
 
-  // Always use the new runtime (no legacy fallback).
-  const scheduler = new AnimationRuntime(host, runtimeEvents);
+  const upsertSnippet = (snippet: NormalizedSnippet, isPlaying: boolean) => {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const next = { ...snippet, isPlaying, startWallTime: now };
+    const index = snippets.findIndex((entry) => entry.name === next.name);
+    if (index >= 0) {
+      const updated = snippets.slice();
+      updated[index] = next;
+      snippets = updated;
+      return;
+    }
+    snippets = [...snippets, next];
+  };
 
-  // Wire up RxJS event emitter with snippet accessor
-  animationEventEmitter.setSnippetAccessor(() => scheduler.getSnippets() as NormalizedSnippet[]);
+  const getCurrentValue = (auId: string) => {
+    if (host.getAU && isNumericId(auId)) {
+      try {
+        return host.getAU(Number(auId));
+      } catch {}
+    }
+    return 0;
+  };
 
-  let disposed = false;
+  const updateSnippetTime = (snippet: NormalizedSnippet, time: number, duration = snippet.duration) => {
+    snippet.currentTime = clampTime(time, duration);
+  };
+
+  const refreshStartWallTime = (snippet: NormalizedSnippet) => {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const rate = Math.max(1e-6, snippet.snippetPlaybackRate || 1);
+    snippet.startWallTime = now - (snippet.currentTime / rate) * 1000;
+  };
+
+  const captureRunnerTime = (name: string, runner?: PlaybackRunner) => {
+    const activeRunner = runner ?? playbackRunners.get(name);
+    const snippet = getSnippet(name);
+    const handle = activeRunner?.clipHandle;
+    if (!snippet || !handle) return;
+    let currentTime = snippet.currentTime;
+    let duration = snippet.duration;
+    try {
+      currentTime = handle.getTime();
+    } catch {}
+    try {
+      duration = handle.getDuration();
+    } catch {}
+    updateSnippetTime(snippet, currentTime, duration);
+  };
+
+  const updateHostClipParams = (name: string, params: Record<string, unknown>) => {
+    const handle = playbackRunners.get(name)?.clipHandle;
+    try {
+      host.updateClipParams?.(name, { ...params, actionId: handle?.actionId });
+    } catch {}
+  };
+
+  const stopPlaybackRunner = (name: string, cleanupHost: boolean) => {
+    const runner = playbackRunners.get(name);
+    if (!runner) {
+      if (cleanupHost) {
+        try { host.cleanupSnippet?.(name); } catch {}
+      }
+      return;
+    }
+
+    runner.active = false;
+    runner.stopResolve();
+    if (runner.unsubscribeClipEvents) {
+      try { runner.unsubscribeClipEvents(); } catch {}
+      runner.unsubscribeClipEvents = undefined;
+    }
+    if (runner.clipHandle) {
+      try { runner.clipHandle.stop(); } catch {}
+      runner.clipHandle = undefined;
+    }
+    playbackRunners.delete(name);
+
+    if (cleanupHost) {
+      try { host.cleanupSnippet?.(name); } catch {}
+    }
+  };
+
+  const subscribeToClipEvents = (
+    snippetName: string,
+    runner: PlaybackRunner,
+    handle: StreamClipHandle,
+  ) => {
+    if (typeof handle.subscribe !== 'function') return false;
+
+    runner.unsubscribeClipEvents = handle.subscribe((event) => {
+      if (!runner.active || runner.clipHandle !== handle) return;
+      const snippet = getSnippet(snippetName);
+      if (!snippet) return;
+
+      const previousTime = snippet.currentTime;
+      if (snippet.mixerLoopMode === 'pingpong') {
+        if (event.type === 'loop') {
+          snippet.loopDirection = 1;
+        } else if (event.currentTime > previousTime + 0.001) {
+          snippet.loopDirection = 1;
+        } else if (event.currentTime < previousTime - 0.001) {
+          snippet.loopDirection = -1;
+        }
+      } else {
+        snippet.loopDirection = snippet.mixerReverse ? -1 : 1;
+      }
+      updateSnippetTime(snippet, event.currentTime, event.duration);
+      if (typeof event.iteration === 'number') {
+        snippet.loopIteration = Math.max(0, event.iteration);
+      }
+
+      switch (event.type) {
+        case 'keyframe':
+          animationEventEmitter.emitKeyframeCompleted({
+            snippetName,
+            keyframeIndex: event.keyframeIndex,
+            totalKeyframes: event.totalKeyframes,
+            currentTime: event.currentTime,
+            duration: event.duration,
+          });
+          return;
+        case 'loop':
+          snippet.lastLoopTime = event.currentTime;
+          animationEventEmitter.emitSnippetLooped({
+            snippetName,
+            iteration: event.iteration,
+            localTime: event.currentTime,
+          });
+          return;
+        case 'seek':
+        case 'completed':
+          return;
+      }
+    });
+
+    return true;
+  };
+
+  const runClipPlayback = async (snippetName: string, runner: PlaybackRunner) => {
+    const snippet = getSnippet(snippetName);
+    if (!snippet || !snippet.curves || !runner.active) {
+      playbackRunners.delete(snippetName);
+      return;
+    }
+
+    if (!host.buildClip) {
+      console.error(`[animationService] buildClip not available - cannot play "${snippetName}"`);
+      playbackRunners.delete(snippetName);
+      return;
+    }
+
+    const loopMode = snippet.mixerLoopMode ?? (snippet.loop ? 'repeat' : 'once');
+    const playbackRate = snippet.snippetPlaybackRate ?? 1;
+    const reverse = !!snippet.mixerReverse;
+    const signedRate = reverse ? -playbackRate : playbackRate;
+    const clipCurves = buildClipCurves(snippet, getCurrentValue, loopMode);
+    const useVisemeCategory = snippet.snippetCategory === 'visemeSnippet' || snippet.snippetCategory === 'combined';
+    const snippetCategory = useVisemeCategory ? 'visemeSnippet' : undefined;
+    const hasJawCurve = Object.prototype.hasOwnProperty.call(snippet.curves || {}, '26');
+    const autoVisemeJawOverride =
+      typeof (snippet as any).autoVisemeJaw === 'boolean' ? (snippet as any).autoVisemeJaw : undefined;
+    const autoVisemeJaw = autoVisemeJawOverride ?? (hasJawCurve ? false : undefined);
+
+    const handle = host.buildClip(
+      snippetName,
+      clipCurves,
+      {
+        loopMode,
+        repeatCount: snippet.mixerRepeatCount,
+        reverse,
+        playbackRate: signedRate,
+        balance: snippet.snippetBalance ?? 0,
+        balanceMap: snippet.snippetBalanceMap ?? {},
+        jawScale: snippet.snippetJawScale ?? 1.0,
+        mixerWeight: typeof snippet.mixerWeight === 'number' ? snippet.mixerWeight : undefined,
+        intensityScale: snippet.snippetIntensityScale ?? 1,
+        snippetCategory,
+        autoVisemeJaw,
+      } as any,
+    ) as StreamClipHandle | null;
+
+    if (!handle) {
+      console.error(`[animationService] buildClip failed for "${snippetName}"`);
+      snippet.isPlaying = false;
+      playbackRunners.delete(snippetName);
+      try { host.cleanupSnippet?.(snippetName); } catch {}
+      return;
+    }
+
+    if (!subscribeToClipEvents(snippetName, runner, handle)) {
+      console.error(
+        `[animationService] Loom3 clip event streams are required for "${snippetName}". Link the Loom3 stream runtime branch or upgrade the dependency.`,
+      );
+      snippet.isPlaying = false;
+      animationEventEmitter.emitPlayStateChanged(snippetName, false);
+      try { handle.stop(); } catch {}
+      playbackRunners.delete(snippetName);
+      try { host.cleanupSnippet?.(snippetName); } catch {}
+      return;
+    }
+
+    runner.clipHandle = handle;
+    handle.play();
+
+    if (typeof runner.seekTime === 'number') {
+      try { handle.setTime?.(runner.seekTime); } catch {}
+      updateSnippetTime(snippet, runner.seekTime, handle.getDuration());
+    }
+
+    if (runner.paused) {
+      try { handle.pause(); } catch {}
+    }
+
+    try {
+      await Promise.race([handle.finished.catch(() => undefined), runner.stopPromise]);
+    } catch {}
+
+    captureRunnerTime(snippetName, runner);
+    if (runner.unsubscribeClipEvents) {
+      try { runner.unsubscribeClipEvents(); } catch {}
+      runner.unsubscribeClipEvents = undefined;
+    }
+    runner.clipHandle = undefined;
+
+    if (runner.active) {
+      snippet.isPlaying = false;
+      animationEventEmitter.emitSnippetCompleted(snippetName);
+      try { host.onSnippetEnd?.(snippetName); } catch {}
+    }
+
+    playbackRunners.delete(snippetName);
+  };
+
+  const startPlaybackRunner = (
+    snippetName: string,
+    opts: { seekTime?: number; paused?: boolean } = {},
+  ) => {
+    stopPlaybackRunner(snippetName, false);
+
+    const snippet = getSnippet(snippetName);
+    if (!snippet || !snippet.curves) return false;
+
+    let stopResolve = () => {};
+    const stopPromise = new Promise<void>((resolve) => {
+      stopResolve = resolve;
+    });
+    const autoSeekTime =
+      opts.seekTime === undefined &&
+      snippet.snippetCategory === 'eyeHeadTracking' &&
+      !eyeHeadUsesInheritedStart(snippet)
+        ? getEyeHeadSeekTime(snippet, getCurrentValue)
+        : undefined;
+    const seekTime = typeof opts.seekTime === 'number' && Number.isFinite(opts.seekTime)
+      ? Math.max(0, opts.seekTime)
+      : autoSeekTime;
+
+    const runner: PlaybackRunner = {
+      snippetName,
+      active: true,
+      paused: !!opts.paused,
+      stopPromise,
+      stopResolve,
+      seekTime,
+    };
+
+    if (typeof seekTime === 'number') {
+      updateSnippetTime(snippet, seekTime);
+    }
+    refreshStartWallTime(snippet);
+    playbackRunners.set(snippetName, runner);
+    void runClipPlayback(snippetName, runner);
+    return true;
+  };
+
+  const pauseSnippetPlayback = (name: string) => {
+    const runner = playbackRunners.get(name);
+    const snippet = getSnippet(name);
+    if (!snippet) return false;
+    captureRunnerTime(name, runner);
+    if (runner) {
+      runner.paused = true;
+      if (runner.clipHandle) {
+        try { runner.clipHandle.pause(); } catch {}
+      }
+    }
+    snippet.isPlaying = false;
+    return true;
+  };
+
+  const resumeSnippetPlayback = (name: string) => {
+    const runner = playbackRunners.get(name);
+    const snippet = getSnippet(name);
+    if (!snippet) return false;
+
+    snippet.isPlaying = true;
+    refreshStartWallTime(snippet);
+
+    if (runner?.clipHandle) {
+      runner.paused = false;
+      try { runner.clipHandle.resume(); } catch {}
+      return true;
+    }
+
+    return startPlaybackRunner(name, {
+      seekTime: snippet.currentTime,
+      paused: false,
+    });
+  };
+
+  const restartSnippetPlayback = (name: string, paused = false) => {
+    const snippet = getSnippet(name);
+    if (!snippet) return false;
+    snippet.isPlaying = !paused;
+    return startPlaybackRunner(name, {
+      seekTime: paused ? snippet.currentTime : undefined,
+      paused,
+    });
+  };
+
+  const seekSnippetPlayback = (name: string, offsetSec: number) => {
+    const snippet = getSnippet(name);
+    if (!snippet) return false;
+
+    const time = Math.max(0, offsetSec);
+    const schedState = ensureSched(name);
+    schedState.offset = time;
+    updateSnippetTime(snippet, time);
+
+    const runner = playbackRunners.get(name);
+    if (runner?.clipHandle?.setTime) {
+      try { runner.clipHandle.setTime(time); } catch {}
+      return true;
+    }
+
+    const paused = !snippet.isPlaying;
+    startPlaybackRunner(name, { seekTime: time, paused });
+    return true;
+  };
 
   // Baked animation engine state (closure variables)
   let bakedEngine: BakedAnimationEngine | null = null;
-  let bakedProgressInterval: ReturnType<typeof setInterval> | null = null;
 
   const getBakedClipInfo = (clipName: string): BakedClipInfo => {
     const clip = animationEventEmitter.getBakedClips().find((entry) => entry.name === clipName);
@@ -47,12 +675,13 @@ export function createAnimationService(host: Engine) {
     return {
       name: clipName,
       duration: existing?.duration ?? 0,
+      channels: existing?.channels ?? [],
     };
   };
 
   const mergeBakedState = (
     clipName: string,
-    patch?: Partial<BakedAnimationUIState> | null
+    patch?: Partial<BakedAnimationUIState> | null,
   ): BakedAnimationUIState => {
     const clip = getBakedClipInfo(clipName);
     const current = animationEventEmitter.getBakedAnimationState(clipName);
@@ -80,11 +709,23 @@ export function createAnimationService(host: Engine) {
     return Math.max(0, Math.min(duration, time));
   };
 
+  const toBakedStatePatch = (
+    state?: BakedRuntimeAnimationState | null,
+  ): Partial<BakedAnimationUIState> | undefined => {
+    if (!state) return undefined;
+    const {
+      source: _source,
+      category: _category,
+      ...rest
+    } = state as BakedRuntimeAnimationState & { category?: unknown };
+    return rest as Partial<BakedAnimationUIState>;
+  };
+
   const startBakedAnimationFromState = (
     clipName: string,
     state: BakedAnimationUIState,
     timeOverride?: number,
-    pauseAfterStart = false
+    pauseAfterStart = false,
   ) => {
     if (!bakedEngine) return null;
     const handle = bakedEngine.playAnimation?.(clipName, toBakedPlayOptions(state));
@@ -119,78 +760,200 @@ export function createAnimationService(host: Engine) {
     return handle;
   };
 
+  const getCurrentBakedEngineState = (clipName: string) => {
+    return bakedEngine?.getPlayingAnimations?.().find((state) => state.name === clipName);
+  };
+
   const api = {
-    // --- Core API (delegated to Scheduler) ---
     loadFromJSON(data: any) {
-      const name = scheduler.loadFromJSON(data);
-      if (name) animationEventEmitter.emitSnippetAdded(name);
-      return name;
+      const snippet = normalizeSnippet(data);
+      upsertSnippet(snippet, !!snippet.isPlaying);
+      ensureSched(snippet.name);
+      animationEventEmitter.emitSnippetAdded(snippet.name);
+      return snippet.name;
     },
 
     updateSnippet(data: any) {
-      const name = scheduler.loadFromJSON(data);
-      if (name && scheduler.isPlaying()) {
-        scheduler.restartSnippet(name);
+      const requestedName = typeof data?.name === 'string' ? data.name : '';
+      const existing = requestedName ? getSnippet(requestedName) : null;
+
+      if (!existing) {
+        const snippet = normalizeSnippet(data);
+        upsertSnippet(snippet, !!snippet.isPlaying);
+        ensureSched(snippet.name);
+        animationEventEmitter.emitSnippetAdded(snippet.name);
+        return snippet.name;
       }
-      return name;
+
+      captureRunnerTime(existing.name);
+      const nextCurves = data?.curves ?? existing.curves;
+      const hasCurves = Object.keys(nextCurves || {}).length > 0;
+      const shouldResume = !!(data?.isPlaying ?? existing.isPlaying) && hasCurves;
+      const currentTime = existing.currentTime ?? 0;
+
+      const nextSnippet = normalizeSnippet({
+        ...existing,
+        ...data,
+        name: existing.name,
+        currentTime,
+        isPlaying: false,
+        loopIteration: existing.loopIteration,
+        loopDirection: existing.loopDirection,
+        lastLoopTime: existing.lastLoopTime,
+        cursor: existing.cursor,
+      });
+
+      upsertSnippet(nextSnippet, false);
+
+      if (hasCurves) {
+        restartSnippetPlayback(nextSnippet.name);
+        if (currentTime > 0) {
+          seekSnippetPlayback(nextSnippet.name, currentTime);
+        }
+        if (!shouldResume) {
+          pauseSnippetPlayback(nextSnippet.name);
+        }
+      } else {
+        pauseSnippetPlayback(nextSnippet.name);
+      }
+
+      animationEventEmitter.emitSnippetUpdated(nextSnippet.name);
+      return nextSnippet.name;
     },
 
-    schedule(data: any, opts?: ScheduleOpts) {
-      const name = scheduler.schedule(data, opts);
-      if (name) animationEventEmitter.emitSnippetAdded(name);
-      return name;
+    schedule(data: any, opts: ScheduleOpts = {}) {
+      const snippet = normalizeSnippet(data);
+      if (typeof opts.priority === 'number') snippet.snippetPriority = opts.priority;
+
+      const schedState = ensureSched(snippet.name);
+      schedState.startsAt = typeof opts.startAtSec === 'number' ? Math.max(0, opts.startAtSec) : 0;
+      schedState.offset = opts.offsetSec ?? 0;
+      schedState.enabled = true;
+
+      const shouldPlay = !!opts.autoPlay || playing;
+      upsertSnippet(snippet, shouldPlay);
+      if (typeof opts.offsetSec === 'number') {
+        const updatedSnippet = getSnippet(snippet.name);
+        if (updatedSnippet) updateSnippetTime(updatedSnippet, opts.offsetSec);
+      }
+      if (shouldPlay) {
+        startPlaybackRunner(snippet.name, {
+          seekTime: schedState.offset || snippet.currentTime || undefined,
+          paused: false,
+        });
+      }
+      animationEventEmitter.emitSnippetAdded(snippet.name);
+      return snippet.name;
     },
 
     remove(name: string) {
-      scheduler.remove(name);
+      stopPlaybackRunner(name, true);
+      sched.delete(name);
+      snippets = snippets.filter((entry) => entry.name !== name);
       animationEventEmitter.emitSnippetRemoved(name);
     },
 
     play() {
-      scheduler.play();
+      if (playing) return;
+      playing = true;
+      for (const snippet of snippets) {
+        const schedState = ensureSched(snippet.name);
+        if (!schedState.enabled) continue;
+        snippet.isPlaying = true;
+        refreshStartWallTime(snippet);
+        resumeSnippetPlayback(snippet.name);
+        animationEventEmitter.emitPlayStateChanged(snippet.name, true);
+      }
       animationEventEmitter.emitGlobalPlaybackChanged('playing');
     },
 
     pause() {
-      scheduler.pause();
+      if (!playing) return;
+      playing = false;
+      for (const snippet of snippets) {
+        if (!snippet.isPlaying) continue;
+        pauseSnippetPlayback(snippet.name);
+        animationEventEmitter.emitPlayStateChanged(snippet.name, false);
+      }
       animationEventEmitter.emitGlobalPlaybackChanged('paused');
     },
 
     stop() {
-      scheduler.stop();
+      playing = false;
+      for (const runnerName of Array.from(playbackRunners.keys())) {
+        stopPlaybackRunner(runnerName, true);
+      }
+      for (const snippet of snippets) {
+        snippet.isPlaying = false;
+        snippet.currentTime = 0;
+        snippet.loopIteration = 0;
+        snippet.loopDirection = snippet.mixerReverse ? -1 : 1;
+        snippet.lastLoopTime = 0;
+        animationEventEmitter.emitPlayStateChanged(snippet.name, false);
+      }
       animationEventEmitter.emitGlobalPlaybackChanged('stopped');
     },
 
     enable(name: string, on = true) {
-      return scheduler.enable(name, on);
+      const schedState = ensureSched(name);
+      schedState.enabled = !!on;
+      const snippet = getSnippet(name);
+      if (!snippet) return false;
+
+      if (!on) {
+        pauseSnippetPlayback(name);
+        animationEventEmitter.emitPlayStateChanged(name, false);
+        return true;
+      }
+
+      if (playing || snippet.isPlaying) {
+        resumeSnippetPlayback(name);
+        animationEventEmitter.emitPlayStateChanged(name, true);
+      }
+      return true;
     },
 
     seek(name: string, offsetSec: number) {
-      return scheduler.seek(name, offsetSec);
+      return seekSnippetPlayback(name, offsetSec);
     },
 
-    // --- State access ---
     getState() {
-      return { context: { animations: scheduler.getSnippets() as NormalizedSnippet[] } };
+      return { context: { animations: snippets } };
     },
 
     getScheduleSnapshot() {
-      return scheduler.getScheduleSnapshot();
+      return snippets.map((snippet) => {
+        const schedState = ensureSched(snippet.name);
+        const localTime =
+          playbackRunners.get(snippet.name)?.clipHandle?.getTime?.() ?? snippet.currentTime ?? 0;
+        const loopMode = snippet.mixerLoopMode ?? (snippet.loop ? 'repeat' : 'once');
+        return {
+          name: snippet.name,
+          enabled: schedState.enabled,
+          startsAt: schedState.startsAt,
+          offset: schedState.offset,
+          localTime,
+          duration: snippet.duration,
+          loop: loopMode !== 'once',
+          priority: snippet.snippetPriority ?? 0,
+          playbackRate: snippet.snippetPlaybackRate ?? 1,
+          intensityScale: snippet.snippetIntensityScale ?? 1,
+        };
+      });
     },
 
     getCurrentValue(auId: string): number {
-      return scheduler.getCurrentValue(auId);
+      return getCurrentValue(auId);
     },
 
     get playing() {
-      return scheduler.isPlaying();
+      return playing;
     },
 
     isPlaying() {
-      return scheduler.isPlaying();
+      return playing;
     },
 
-    // --- LocalStorage loading ---
     loadFromLocal(key: string, cat = 'default', prio = 0) {
       const str = localStorage.getItem(key);
       if (!str) return null;
@@ -207,156 +970,166 @@ export function createAnimationService(host: Engine) {
       }
     },
 
-    // --- Per-snippet controls ---
     setSnippetPlaybackRate(name: string, rate: number) {
-      const sn = getSnippet(name);
-      if (!sn) return;
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      captureRunnerTime(name);
 
-      const newRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
-      const oldRate = sn.snippetPlaybackRate ?? 1;
+      const nextRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+      snippet.snippetPlaybackRate = nextRate;
+      refreshStartWallTime(snippet);
+      animationEventEmitter.emitParamsChanged(name, { playbackRate: nextRate });
 
-      if (Math.abs(newRate - oldRate) > 0.001) {
-        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        const currentLocal = ((now - (sn.startWallTime || now)) / 1000) * oldRate;
-        sn.startWallTime = now - (currentLocal / newRate) * 1000;
+      const handle = playbackRunners.get(name)?.clipHandle;
+      const signedRate = (snippet.mixerReverse ? -1 : 1) * nextRate;
+      if (handle?.setPlaybackRate) {
+        try { handle.setPlaybackRate(signedRate); } catch {}
       }
-      sn.snippetPlaybackRate = newRate;
-      animationEventEmitter.emitParamsChanged(name, { playbackRate: newRate });
-
-      // Update mixer action directly (no reschedule)
-      scheduler.updateSnippetParams(name, { rate: newRate });
-      host.updateClipParams?.(name, { rate: newRate, reverse: !!sn.mixerReverse });
+      updateHostClipParams(name, { rate: nextRate, reverse: !!snippet.mixerReverse });
     },
 
     setSnippetIntensityScale(name: string, scale: number) {
-      const sn = getSnippet(name);
-      if (sn) {
-        const newScale = Math.max(0, Number.isFinite(scale) ? scale : 1);
-        sn.snippetIntensityScale = newScale;
-        animationEventEmitter.emitParamsChanged(name, { intensityScale: newScale });
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      const nextScale = Math.max(0, Number.isFinite(scale) ? scale : 1);
+      snippet.snippetIntensityScale = nextScale;
+      animationEventEmitter.emitParamsChanged(name, { intensityScale: nextScale });
 
-         // Update mixer action directly (no reschedule)
-         scheduler.updateSnippetParams(name, { weight: newScale });
-         host.updateClipParams?.(name, { weight: newScale });
+      const handle = playbackRunners.get(name)?.clipHandle;
+      if (handle?.setWeight) {
+        try { handle.setWeight(nextScale); } catch {}
       }
+      updateHostClipParams(name, { weight: nextScale });
     },
 
     setSnippetBlendMode(name: string, mode: 'replace' | 'additive') {
-      const sn = getSnippet(name);
-      if (!sn) return;
+      const snippet = getSnippet(name);
+      if (!snippet) return;
       const nextMode = mode === 'additive' ? 'additive' : 'replace';
-      if (sn.snippetBlendMode !== nextMode) {
-        sn.snippetBlendMode = nextMode;
+      if (snippet.snippetBlendMode !== nextMode) {
+        snippet.snippetBlendMode = nextMode;
         animationEventEmitter.emitParamsChanged(name, { blendMode: nextMode });
       }
     },
 
     setSnippetBalance(name: string, balance: number) {
-      const sn = getSnippet(name);
-      if (!sn) return;
+      const snippet = getSnippet(name);
+      if (!snippet) return;
       const nextBalance = Math.max(-1, Math.min(1, Number.isFinite(balance) ? balance : 0));
-      if (Math.abs(sn.snippetBalance - nextBalance) > 0.001) {
-        sn.snippetBalance = nextBalance;
+      if (Math.abs(snippet.snippetBalance - nextBalance) > 0.001) {
+        snippet.snippetBalance = nextBalance;
         animationEventEmitter.emitParamsChanged(name, { balance: nextBalance });
-
-        // Balance affects track construction, so rebuild active clip playback to apply it immediately.
-        if (sn.isPlaying) {
-          scheduler.restartSnippet(name);
+        if (snippet.isPlaying) {
+          restartSnippetPlayback(name);
         }
       }
     },
 
     setSnippetEasing(name: string, easing: import('./types').EasingType) {
-      const sn = getSnippet(name);
-      if (!sn) return;
-      if (sn.snippetEasing !== easing) {
-        sn.snippetEasing = easing;
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      if (snippet.snippetEasing !== easing) {
+        snippet.snippetEasing = easing;
         animationEventEmitter.emitParamsChanged(name, { easing });
       }
     },
 
     setSnippetPriority(name: string, priority: number) {
-      const sn = getSnippet(name);
-      if (sn) {
-        sn.snippetPriority = Number.isFinite(priority) ? priority : 0;
+      const snippet = getSnippet(name);
+      if (snippet) {
+        snippet.snippetPriority = Number.isFinite(priority) ? priority : 0;
       }
     },
 
     setSnippetLoopMode(name: string, mode: 'repeat' | 'once' | 'pingpong') {
-      const sn = getSnippet(name);
-      if (!sn) return;
-      sn.mixerLoopMode = mode;
-      sn.loop = mode !== 'once';
-      animationEventEmitter.emitParamsChanged(name, { mixerLoopMode: mode, loop: sn.loop });
-      scheduler.updateSnippetParams(name, { loopMode: mode, repeatCount: sn.mixerRepeatCount });
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      snippet.mixerLoopMode = mode;
+      snippet.loop = mode !== 'once';
+      animationEventEmitter.emitParamsChanged(name, { mixerLoopMode: mode, loop: snippet.loop });
+
+      const handle = playbackRunners.get(name)?.clipHandle;
+      if (handle?.setLoop) {
+        try { handle.setLoop(mode, snippet.mixerRepeatCount); } catch {}
+      }
+      updateHostClipParams(name, { loopMode: mode, repeatCount: snippet.mixerRepeatCount });
     },
 
     setSnippetRepeatCount(name: string, repeatCount?: number) {
-      const sn = getSnippet(name);
-      if (!sn) return;
-      const next = typeof repeatCount === 'number' && repeatCount >= 0 ? repeatCount : undefined;
-      sn.mixerRepeatCount = next;
-      animationEventEmitter.emitParamsChanged(name, { repeatCount: next });
-      scheduler.updateSnippetParams(name, { repeatCount: next });
-      host.updateClipParams?.(name, { repeatCount: next });
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      const nextRepeatCount =
+        typeof repeatCount === 'number' && repeatCount >= 0 ? repeatCount : undefined;
+      snippet.mixerRepeatCount = nextRepeatCount;
+      animationEventEmitter.emitParamsChanged(name, { repeatCount: nextRepeatCount });
+
+      const handle = playbackRunners.get(name)?.clipHandle;
+      if (handle?.setLoop) {
+        try { handle.setLoop(snippet.mixerLoopMode ?? (snippet.loop ? 'repeat' : 'once'), nextRepeatCount); } catch {}
+      }
+      updateHostClipParams(name, { repeatCount: nextRepeatCount });
     },
 
     setSnippetReverse(name: string, reverse: boolean) {
-      const sn = getSnippet(name);
-      if (!sn) return;
-      sn.mixerReverse = !!reverse;
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      snippet.mixerReverse = !!reverse;
       animationEventEmitter.emitParamsChanged(name, { reverse: !!reverse });
-      scheduler.updateSnippetParams(name, { reverse: !!reverse, rate: sn.snippetPlaybackRate });
+
+      const handle = playbackRunners.get(name)?.clipHandle;
+      if (handle?.setPlaybackRate) {
+        const signedRate = (snippet.mixerReverse ? -1 : 1) * (snippet.snippetPlaybackRate ?? 1);
+        try { handle.setPlaybackRate(signedRate); } catch {}
+      }
+      updateHostClipParams(name, { reverse: !!reverse, rate: snippet.snippetPlaybackRate });
     },
 
-    setSnippetPlaying(name: string, playing: boolean) {
-      const sn = getSnippet(name);
-      if (!sn) return;
-      sn.isPlaying = !!playing;
+    setSnippetPlaying(name: string, nextPlaying: boolean) {
+      const snippet = getSnippet(name);
+      if (!snippet) return;
 
-      if (playing) {
-        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        const currentLocal = sn.currentTime || 0;
-        const rate = sn.snippetPlaybackRate ?? 1;
-        sn.startWallTime = now - (currentLocal / rate) * 1000;
-        scheduler.resumeSnippet(name);
+      snippet.isPlaying = !!nextPlaying;
+      if (nextPlaying) {
+        resumeSnippetPlayback(name);
       } else {
-        scheduler.pauseSnippet(name);
+        pauseSnippetPlayback(name);
       }
-      animationEventEmitter.emitPlayStateChanged(name, !!playing);
+      animationEventEmitter.emitPlayStateChanged(name, !!nextPlaying);
     },
 
     setSnippetTime(name: string, tSec: number) {
       const time = Math.max(0, tSec || 0);
-      scheduler.seek(name, time);
-      animationEventEmitter.emitSnippetSeeked(name, time);
+      if (seekSnippetPlayback(name, time)) {
+        animationEventEmitter.emitSnippetSeeked(name, time);
+      }
     },
 
     setSnippetLoopState(name: string, iteration: number, localTime?: number) {
-      const sn = getSnippet(name);
-      if (!sn) return;
-      sn.loopIteration = Math.max(0, iteration);
-      if (typeof localTime === 'number') sn.lastLoopTime = localTime;
+      const snippet = getSnippet(name);
+      if (!snippet) return;
+      snippet.loopIteration = Math.max(0, iteration);
+      if (typeof localTime === 'number') snippet.lastLoopTime = localTime;
     },
 
-    // --- Playback runner controls ---
     pauseSnippet(name: string) {
-      return scheduler.pauseSnippet(name);
+      return pauseSnippetPlayback(name);
     },
 
     resumeSnippet(name: string) {
-      return scheduler.resumeSnippet(name);
+      return resumeSnippetPlayback(name);
     },
 
     restartSnippet(name: string) {
-      return scheduler.restartSnippet(name);
+      return restartSnippetPlayback(name);
     },
 
     stopSnippet(name: string) {
-      return scheduler.stopSnippet(name);
+      stopPlaybackRunner(name, true);
+      sched.delete(name);
+      snippets = snippets.filter((entry) => entry.name !== name);
+      return true;
     },
 
-    // --- Legacy subscription (for backwards compatibility) ---
     onTransition(cb: (snapshot: any) => void) {
       const sub = animationEventEmitter.events.subscribe(() => {
         cb(api.getState());
@@ -364,54 +1137,47 @@ export function createAnimationService(host: Engine) {
       return () => sub.unsubscribe();
     },
 
-    // --- Lifecycle ---
     dispose() {
       if (disposed) return;
       disposed = true;
-      if (bakedProgressInterval) {
-        clearInterval(bakedProgressInterval);
-        bakedProgressInterval = null;
+      for (const name of Array.from(playbackRunners.keys())) {
+        stopPlaybackRunner(name, true);
       }
+      playing = false;
       bakedEngine = null;
       animationEventEmitter.emitBakedClipsLoaded([]);
-      try { scheduler.dispose(); } catch {}
-      //
     },
 
-    // --- Debug ---
     debug() {
-      const anims = scheduler.getSnippets();
-      anims.forEach((a: any, i: number) => {
-        void a;
-        void i;
+      snippets.forEach((animation, index) => {
+        void animation;
+        void index;
       });
     },
 
-    // --- Baked Animation Controls ---
     setBakedAnimationEngine(engine: BakedAnimationEngine) {
       bakedEngine = engine;
       const clips = engine.getAnimationClips?.() || [];
-      animationEventEmitter.emitBakedClipsLoaded(clips.map(c => ({ name: c.name, duration: c.duration })));
+      animationEventEmitter.emitBakedClipsLoaded(clips.map((clip) => ({
+        name: clip.name,
+        duration: clip.duration,
+        channels: clip.channels ?? [],
+      })));
       clips.forEach((clip) => {
         animationEventEmitter.updateBakedAnimationState(clip.name, mergeBakedState(clip.name));
       });
-      const playing = engine.getPlayingAnimations?.() || [];
-      playing.forEach((state) => {
+      const playingAnimations = engine.getPlayingAnimations?.() || [];
+      playingAnimations.forEach((state) => {
         animationEventEmitter.updateBakedAnimationState(
           state.name,
-          toBakedUIState(getBakedClipInfo(state.name), state as Partial<BakedAnimationUIState>)
+          toBakedUIState(getBakedClipInfo(state.name), toBakedStatePatch(state)),
         );
       });
-
-      if (bakedProgressInterval) {
-        clearInterval(bakedProgressInterval);
-        bakedProgressInterval = null;
-      }
     },
 
     playBakedAnimation(
       clipName: string,
-      options?: Parameters<BakedAnimationEngine['playAnimation']>[1]
+      options?: Parameters<BakedAnimationEngine['playAnimation']>[1],
     ) {
       if (!bakedEngine) {
         return null;
@@ -435,6 +1201,7 @@ export function createAnimationService(host: Engine) {
         nextPatch.weight = intensityScale;
       }
       if (options?.blendMode) nextPatch.blendMode = options.blendMode;
+      if (options?.blendMode) nextPatch.requestedBlendMode = options.blendMode;
       if (typeof options?.balance === 'number') nextPatch.balance = options.balance;
       if (options?.easing) nextPatch.easing = options.easing;
       const nextState = mergeBakedState(clipName, {
@@ -532,10 +1299,17 @@ export function createAnimationService(host: Engine) {
     },
 
     setBakedAnimationBlendMode(clipName: string, mode: 'replace' | 'additive') {
-      const nextState = mergeBakedState(clipName, { blendMode: mode });
-      animationEventEmitter.updateBakedAnimationState(clipName, nextState);
-      animationEventEmitter.emitBakedAnimationParamsChanged(clipName, { blendMode: mode });
       bakedEngine?.setAnimationBlendMode?.(clipName, mode);
+      const engineState = getCurrentBakedEngineState(clipName);
+      const nextState = mergeBakedState(clipName, {
+        ...toBakedStatePatch(engineState),
+        requestedBlendMode: mode,
+        blendMode: engineState?.blendMode ?? mode,
+      });
+      animationEventEmitter.updateBakedAnimationState(clipName, nextState);
+      animationEventEmitter.emitBakedAnimationParamsChanged(clipName, {
+        blendMode: nextState.blendMode,
+      });
     },
 
     setBakedAnimationBalance(clipName: string, balance: number) {
@@ -579,10 +1353,10 @@ export function createAnimationService(host: Engine) {
 
     stopAllBakedAnimations() {
       if (!bakedEngine) return;
-      const playing = animationEventEmitter.getPlayingBakedAnimations();
+      const playingAnimations = animationEventEmitter.getPlayingBakedAnimations();
       bakedEngine.stopAllAnimations?.();
-      for (const anim of playing) {
-        animationEventEmitter.emitBakedAnimationStopped(anim.name);
+      for (const animation of playingAnimations) {
+        animationEventEmitter.emitBakedAnimationStopped(animation.name);
       }
     },
 
@@ -595,14 +1369,9 @@ export function createAnimationService(host: Engine) {
     },
   } as const;
 
-  // Helper to get snippet from runtime
-  function getSnippet(name: string) {
-    const list = scheduler.getSnippets() as any[] || [];
-    return list.find((s) => s?.name === name);
+  if (typeof window !== 'undefined' && isRuntimeDebugEnabled()) {
+    (window as any).anim = api;
   }
-
-  // Expose on window for debugging
-  (window as any).anim = api;
 
   return api;
 }
@@ -626,6 +1395,8 @@ function toUIState(sn: NormalizedSnippet): SnippetUIState {
     loop,
     loopMode,
     repeatCount: sn.mixerRepeatCount,
+    loopIteration: sn.loopIteration,
+    loopDirection: sn.loopDirection,
     reverse: !!sn.mixerReverse,
     currentTime: sn.currentTime,
     duration: sn.duration,
@@ -662,10 +1433,12 @@ function toBakedUIState(
     loopMode,
     reverse: !!state?.reverse,
     repeatCount: state?.repeatCount,
+    requestedBlendMode: state?.requestedBlendMode ?? state?.blendMode ?? 'replace',
     blendMode: state?.blendMode ?? 'replace',
     balance: Math.max(-1, Math.min(1, Number.isFinite(state?.balance) ? state?.balance ?? 0 : 0)),
     category: 'baked',
     easing: state?.easing ?? 'linear',
+    channels: state?.channels ?? clip.channels ?? [],
   };
 }
 
@@ -677,8 +1450,49 @@ function toBakedPlayOptions(state: BakedAnimationUIState) {
     reverse: state.reverse,
     playbackRate: state.playbackRate,
     weight: state.intensityScale,
-    blendMode: state.blendMode,
+    blendMode: state.requestedBlendMode,
   };
+}
+
+function cloneRawSnippet(snippet: NormalizedSnippet): NormalizedSnippet {
+  const interpretation = snippet.aiExpressionMetadata?.interpretation;
+
+  return {
+    ...snippet,
+    curves: Object.fromEntries(
+      Object.entries(snippet.curves || {}).map(([curveId, points]) => [
+        curveId,
+        points.map((point) => ({ ...point })),
+      ]),
+    ),
+    snippetBalanceMap: { ...(snippet.snippetBalanceMap || {}) },
+    cursor: { ...(snippet.cursor || {}) },
+    aiExpressionMetadata: snippet.aiExpressionMetadata
+      ? {
+          ...snippet.aiExpressionMetadata,
+          interpretation: interpretation
+            ? {
+                ...interpretation,
+                aus: { ...(interpretation.aus || {}) },
+                notesByAu: interpretation.notesByAu
+                  ? { ...interpretation.notesByAu }
+                  : undefined,
+              }
+            : interpretation,
+        }
+          : undefined,
+  };
+}
+
+function bakedChannelsEqual(a: BakedAnimationUIState['channels'], b: BakedAnimationUIState['channels']) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].channel !== b[i].channel) return false;
+    if (a[i].trackCount !== b[i].trackCount) return false;
+    if (a[i].playable !== b[i].playable) return false;
+    if (a[i].blendMode !== b[i].blendMode) return false;
+  }
+  return true;
 }
 
 /**
@@ -691,8 +1505,8 @@ function toBakedPlayOptions(state: BakedAnimationUIState) {
  * - Snippets are added/removed
  * - Parameters change (rate, intensity, loop mode)
  *
- * React hooks subscribe to events and read state from the animation runtime on demand.
- * No intermediate state copying - events are just notifications.
+ * React hooks subscribe to events and read the service-owned UI state on demand.
+ * Runtime playback stays in Loom3; these events are frontend notifications.
  */
 class AnimationEventEmitter {
   private event$ = new Subject<AnimationEvent>();
@@ -725,7 +1539,14 @@ class AnimationEventEmitter {
   /** Get raw snippets with full data including curves (for curve editors) */
   getRawSnippets(): NormalizedSnippet[] {
     if (!this._getSnippets) return [];
-    return this._getSnippets();
+    return this._getSnippets().map(cloneRawSnippet);
+  }
+
+  /** Get a single raw snippet with curve data */
+  getRawSnippet(name: string): NormalizedSnippet | null {
+    if (!this._getSnippets) return null;
+    const snippet = this._getSnippets().find((entry) => entry.name === name);
+    return snippet ? cloneRawSnippet(snippet) : null;
   }
 
   /** Get a single snippet by name */
@@ -767,6 +1588,14 @@ class AnimationEventEmitter {
       type: 'SNIPPET_PLAY_STATE_CHANGED',
       snippetName,
       isPlaying,
+      timestamp: this.now(),
+    });
+  }
+
+  emitSnippetUpdated(snippetName: string) {
+    this.event$.next({
+      type: 'SNIPPET_UPDATED',
+      snippetName,
       timestamp: this.now(),
     });
   }
@@ -1027,6 +1856,7 @@ export function snippetState$(snippetName: string): Observable<SnippetUIState | 
     filter(e => {
       if (e.type === 'SNIPPET_ADDED' || e.type === 'SNIPPET_REMOVED') return true;
       // Discrete state change events for this snippet
+      if (e.type === 'SNIPPET_UPDATED' && e.snippetName === snippetName) return true;
       if (e.type === 'SNIPPET_PLAY_STATE_CHANGED' && e.snippetName === snippetName) return true;
       if (e.type === 'SNIPPET_COMPLETED' && e.snippetName === snippetName) return true;
       if (e.type === 'SNIPPET_LOOPED' && e.snippetName === snippetName) return true;
@@ -1044,7 +1874,10 @@ export function snippetState$(snippetName: string): Observable<SnippetUIState | 
         a.isPlaying === b.isPlaying &&
         a.loopMode === b.loopMode &&
         a.repeatCount === b.repeatCount &&
+        a.loopIteration === b.loopIteration &&
+        a.loopDirection === b.loopDirection &&
         a.reverse === b.reverse &&
+        a.duration === b.duration &&
         a.playbackRate === b.playbackRate &&
         a.intensityScale === b.intensityScale &&
         a.blendMode === b.blendMode &&
@@ -1062,10 +1895,20 @@ export function snippetState$(snippetName: string): Observable<SnippetUIState | 
  */
 export function snippetTime$(snippetName: string, throttleMs = 100): Observable<number> {
   return animationEventEmitter.events.pipe(
-    filter((e): e is KeyframeCompletedEvent =>
-      e.type === 'KEYFRAME_COMPLETED' && e.snippetName === snippetName
-    ),
-    map(e => e.currentTime),
+    filter((e) => {
+      if (e.type === 'KEYFRAME_COMPLETED' && e.snippetName === snippetName) return true;
+      if (e.type === 'SNIPPET_SEEKED' && e.snippetName === snippetName) return true;
+      if (e.type === 'SNIPPET_LOOPED' && e.snippetName === snippetName) return true;
+      if (e.type === 'SNIPPET_COMPLETED' && e.snippetName === snippetName) return true;
+      if (e.type === 'SNIPPET_PLAY_STATE_CHANGED' && e.snippetName === snippetName) return true;
+      return false;
+    }),
+    map(e => {
+      if (e.type === 'KEYFRAME_COMPLETED') return e.currentTime;
+      if (e.type === 'SNIPPET_SEEKED') return e.time;
+      if (e.type === 'SNIPPET_LOOPED') return e.localTime;
+      return animationEventEmitter.getSnippet(snippetName)?.currentTime ?? 0;
+    }),
     throttleTime(throttleMs, undefined, { leading: true, trailing: true }),
     distinctUntilChanged((a, b) => Math.abs(a - b) < 0.05),
     shareReplay(1)
@@ -1127,9 +1970,11 @@ export const playingBakedAnimations$: Observable<BakedAnimationUIState[]> =
         if (a[i].loopMode !== b[i].loopMode) return false;
         if (a[i].repeatCount !== b[i].repeatCount) return false;
         if (a[i].reverse !== b[i].reverse) return false;
+        if (a[i].requestedBlendMode !== b[i].requestedBlendMode) return false;
         if (a[i].blendMode !== b[i].blendMode) return false;
         if (a[i].balance !== b[i].balance) return false;
         if (a[i].easing !== b[i].easing) return false;
+        if (!bakedChannelsEqual(a[i].channels, b[i].channels)) return false;
       }
       return true;
     }),
@@ -1166,9 +2011,11 @@ export function bakedAnimationState$(clipName: string): Observable<BakedAnimatio
         a.loopMode === b.loopMode &&
         a.repeatCount === b.repeatCount &&
         a.reverse === b.reverse &&
+        a.requestedBlendMode === b.requestedBlendMode &&
         a.blendMode === b.blendMode &&
         a.balance === b.balance &&
-        a.easing === b.easing
+        a.easing === b.easing &&
+        bakedChannelsEqual(a.channels, b.channels)
       );
     }),
     shareReplay(1)

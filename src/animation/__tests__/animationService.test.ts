@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { animationEventEmitter, createAnimationService } from '../animationService';
+import { animationEventEmitter, createAnimationService, snippetState$, snippetTime$ } from '../animationService';
 import type { Engine } from '../types';
 
 describe('AnimationService', () => {
@@ -15,6 +15,7 @@ describe('AnimationService', () => {
   beforeEach(() => {
     // Use fake timers for deterministic time control
     vi.useFakeTimers();
+    vi.unstubAllEnvs();
 
     // Mock performance.now() to use Date.now() so fake timers work
     const originalPerformance = globalThis.performance;
@@ -63,6 +64,7 @@ describe('AnimationService', () => {
         ...Object.values(curves).flatMap((curve) => curve.map((kf) => kf.time))
       );
       let time = 0;
+      const listeners = new Set<(event: any) => void>();
       let resolveFinished = () => {};
       const finished = new Promise<void>((resolve) => {
         resolveFinished = resolve;
@@ -73,6 +75,17 @@ describe('AnimationService', () => {
         clipName: name,
         play: vi.fn(() => {
           time = duration;
+          listeners.forEach((listener) => {
+            listener({
+              type: 'keyframe',
+              clipName: name,
+              keyframeIndex: 0,
+              totalKeyframes: 1,
+              currentTime: time,
+              duration,
+              iteration: 0,
+            });
+          });
           setTimeout(() => resolveFinished(), 0);
         }),
         pause: vi.fn(),
@@ -81,10 +94,29 @@ describe('AnimationService', () => {
         getTime: vi.fn(() => time),
         setTime: vi.fn((nextTime: number) => {
           time = nextTime;
+          listeners.forEach((listener) => {
+            listener({
+              type: 'seek',
+              clipName: name,
+              currentTime: time,
+              duration,
+              iteration: 0,
+            });
+          });
         }),
         getDuration: vi.fn(() => duration),
+        setWeight: vi.fn(),
         setPlaybackRate: vi.fn(),
         setLoop: vi.fn(),
+        subscribe: vi.fn((listener: (event: any) => void) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        }),
+        emit: (event: any) => {
+          listeners.forEach((listener) => listener(event));
+        },
         finished,
       };
     };
@@ -130,8 +162,17 @@ describe('AnimationService', () => {
       expect(service.isPlaying()).toBe(false);
     });
 
-    it('should expose window.anim global', () => {
-      expect((window as any).anim).toBe(service);
+    it('should not expose window.anim globally by default outside development mode', () => {
+      expect((window as any).anim).toBeUndefined();
+    });
+
+    it('should expose window.anim when runtime debug is explicitly enabled', () => {
+      vi.stubEnv('VITE_ENABLE_RUNTIME_DEBUG', 'true');
+      const debugService = createAnimationService(mockHost as Engine);
+
+      expect((window as any).anim).toBe(debugService);
+
+      debugService.dispose();
     });
   });
 
@@ -373,6 +414,30 @@ describe('AnimationService', () => {
       expect(loaded.snippetIntensityScale).toBe(0.5);
     });
 
+    it('should update active clip intensity without rebuilding playback', () => {
+      const snippet = {
+        name: 'test_scale_live',
+        curves: { '1': [{ time: 0, intensity: 0 }, { time: 1, intensity: 1.0 }] }
+      };
+
+      service.loadFromJSON(snippet);
+      service.play();
+
+      expect(builtClips).toHaveLength(1);
+
+      const activeHandle = builtClips[0].handle;
+
+      service.setSnippetIntensityScale('test_scale_live', 0.5);
+
+      expect(builtClips).toHaveLength(1);
+      expect(activeHandle.stop).not.toHaveBeenCalled();
+      expect(activeHandle.setWeight).toHaveBeenCalledWith(0.5);
+      expect(mockHost.updateClipParams).toHaveBeenCalledWith(
+        'test_scale_live',
+        expect.objectContaining({ weight: 0.5, actionId: 'test_scale_live-action' })
+      );
+    });
+
     it('should set snippet priority', () => {
       const snippet = {
         name: 'test_priority',
@@ -447,6 +512,51 @@ describe('AnimationService', () => {
     });
   });
 
+  describe('Snippet Updates', () => {
+    it('updates snippet curves in place and emits SNIPPET_UPDATED', () => {
+      const snippet = {
+        name: 'editable_curve',
+        snippetCategory: 'auSnippet',
+        curves: {
+          '12': [
+            { time: 0, intensity: 0 },
+            { time: 1, intensity: 0.6 },
+          ],
+        },
+      };
+
+      service.loadFromJSON(snippet);
+
+      const eventTypes: string[] = [];
+      const subscription = animationEventEmitter.events.subscribe((event) => {
+        eventTypes.push(event.type);
+      });
+
+      service.updateSnippet({
+        name: 'editable_curve',
+        snippetCategory: 'auSnippet',
+        curves: {
+          '12': [
+            { time: 0, intensity: 0 },
+            { time: 1, intensity: 0.4 },
+          ],
+          '6': [
+            { time: 0, intensity: 0 },
+            { time: 1, intensity: 0.8 },
+          ],
+        },
+      });
+
+      subscription.unsubscribe();
+
+      const state = service.getState();
+      const loaded = state.context.animations[0];
+      expect(Object.keys(loaded.curves)).toEqual(['6', '12']);
+      expect(loaded.duration).toBe(1);
+      expect(eventTypes).toContain('SNIPPET_UPDATED');
+    });
+  });
+
   describe('Seek Functionality', () => {
     it('should seek to specific time in snippet', () => {
       const snippet = {
@@ -508,6 +618,136 @@ describe('AnimationService', () => {
       expect(builtClips[0].handle.play).toHaveBeenCalled();
       expect(mockHost.onSnippetEnd as any).toHaveBeenCalledWith('test_playback');
     });
+
+    it('emits time stream anchors from seek and clip events', async () => {
+      const anchors: number[] = [];
+      const subscription = snippetTime$('time_stream', 0).subscribe((time) => {
+        anchors.push(time);
+      });
+
+      service.loadFromJSON({
+        name: 'time_stream',
+        curves: { '1': [{ time: 0, intensity: 0 }, { time: 1, intensity: 1 }] },
+      });
+
+      service.setSnippetTime('time_stream', 0.4);
+      service.play();
+      await vi.runAllTimersAsync();
+
+      subscription.unsubscribe();
+
+      expect(anchors).toContain(0.4);
+      expect(anchors).toContain(1);
+    });
+
+    it('publishes loop iteration changes for pingpong scrubber direction', () => {
+      const states: Array<ReturnType<typeof animationEventEmitter.getSnippet>> = [];
+      const subscription = snippetState$('pingpong_loop').subscribe((state) => {
+        states.push(state);
+      });
+
+      service.loadFromJSON({
+        name: 'pingpong_loop',
+        curves: { '1': [{ time: 0, intensity: 0 }, { time: 1, intensity: 1 }] },
+        mixerLoopMode: 'pingpong',
+      });
+
+      service.play();
+      builtClips[0].handle.emit({
+        type: 'loop',
+        clipName: 'pingpong_loop',
+        iteration: 1,
+        currentTime: 0,
+        duration: 1,
+      });
+
+      subscription.unsubscribe();
+
+      expect(animationEventEmitter.getSnippet('pingpong_loop')?.loopIteration).toBe(1);
+      expect(states[states.length - 1]?.loopIteration).toBe(1);
+    });
+
+    it('publishes pingpong playback direction changes for scrubber phase', () => {
+      const states: Array<ReturnType<typeof animationEventEmitter.getSnippet>> = [];
+      const subscription = snippetState$('pingpong_direction').subscribe((state) => {
+        states.push(state);
+      });
+
+      service.loadFromJSON({
+        name: 'pingpong_direction',
+        curves: { '1': [{ time: 0, intensity: 0 }, { time: 1, intensity: 1 }] },
+        mixerLoopMode: 'pingpong',
+      });
+
+      service.play();
+      builtClips[0].handle.emit({
+        type: 'keyframe',
+        clipName: 'pingpong_direction',
+        keyframeIndex: 1,
+        totalKeyframes: 2,
+        iteration: 0,
+        currentTime: 1,
+        duration: 1,
+      });
+      builtClips[0].handle.emit({
+        type: 'keyframe',
+        clipName: 'pingpong_direction',
+        keyframeIndex: 0,
+        totalKeyframes: 2,
+        iteration: 0,
+        currentTime: 0,
+        duration: 1,
+      });
+
+      subscription.unsubscribe();
+
+      expect(animationEventEmitter.getSnippet('pingpong_direction')?.loopDirection).toBe(-1);
+      expect(states[states.length - 1]?.loopDirection).toBe(-1);
+    });
+
+    it('should fail fast instead of polling when Loom3 clip streams are missing', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      let resolveFinished = () => {};
+      const handle = {
+        actionId: 'missing_stream-action',
+        clipName: 'missing_stream',
+        play: vi.fn(),
+        pause: vi.fn(),
+        resume: vi.fn(),
+        stop: vi.fn(() => resolveFinished()),
+        getTime: vi.fn(() => 0),
+        setTime: vi.fn(),
+        getDuration: vi.fn(() => 1),
+        setWeight: vi.fn(),
+        setPlaybackRate: vi.fn(),
+        setLoop: vi.fn(),
+        finished: new Promise<void>((resolve) => {
+          resolveFinished = resolve;
+        }),
+      };
+
+      (mockHost.buildClip as any) = vi.fn((name, curves, options) => {
+        builtClips.push({ name, curves, options, handle });
+        return handle;
+      });
+
+      service.loadFromJSON({
+        name: 'missing_stream',
+        curves: { '1': [{ time: 0, intensity: 0 }, { time: 1, intensity: 1 }] },
+      });
+      service.play();
+
+      await vi.runAllTimersAsync();
+
+      expect(builtClips).toHaveLength(1);
+      expect(handle.play).not.toHaveBeenCalled();
+      expect(handle.stop).toHaveBeenCalled();
+      expect(mockHost.cleanupSnippet as any).toHaveBeenCalledWith('missing_stream');
+      expect(service.getState().context.animations[0].isPlaying).toBe(false);
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Loom3 clip event streams are required'));
+
+      consoleError.mockRestore();
+    });
   });
 
   describe('Baked Animation State', () => {
@@ -531,7 +771,7 @@ describe('AnimationService', () => {
 
       service.setBakedAnimationEngine(bakedEngine as any);
 
-      expect(service.getBakedClips()).toEqual([{ name: 'Idle', duration: 4 }]);
+      expect(service.getBakedClips()).toEqual([{ name: 'Idle', duration: 4, channels: [] }]);
       expect(animationEventEmitter.getBakedAnimationState('Idle')).toMatchObject({
         name: 'Idle',
         source: 'baked',
@@ -541,6 +781,55 @@ describe('AnimationService', () => {
         loopMode: 'once',
         playbackRate: 1,
         intensityScale: 1,
+      });
+    });
+
+    it('preserves Loom3 baked channel metadata in clip and state snapshots', () => {
+      const bakedEngine = {
+        getAnimationClips: vi.fn(() => [{
+          name: 'Idle',
+          duration: 4,
+          channels: [
+            { channel: 'face', trackCount: 2, playable: true, blendMode: 'additive' },
+            { channel: 'body', trackCount: 8, playable: true, blendMode: 'replace' },
+            { channel: 'scene', trackCount: 1, playable: false },
+          ],
+        }]),
+        getPlayingAnimations: vi.fn(() => []),
+        playAnimation: vi.fn(),
+        stopAnimation: vi.fn(),
+        pauseAnimation: vi.fn(),
+        resumeAnimation: vi.fn(),
+        setAnimationSpeed: vi.fn(),
+        setAnimationIntensity: vi.fn(),
+        setAnimationLoopMode: vi.fn(),
+        setAnimationRepeatCount: vi.fn(),
+        setAnimationReverse: vi.fn(),
+        setAnimationBlendMode: vi.fn(),
+        seekAnimation: vi.fn(),
+        stopAllAnimations: vi.fn(),
+      };
+
+      service.setBakedAnimationEngine(bakedEngine as any);
+
+      expect(service.getBakedClips()).toEqual([{
+        name: 'Idle',
+        duration: 4,
+        channels: [
+          { channel: 'face', trackCount: 2, playable: true, blendMode: 'additive' },
+          { channel: 'body', trackCount: 8, playable: true, blendMode: 'replace' },
+          { channel: 'scene', trackCount: 1, playable: false },
+        ],
+      }]);
+      expect(animationEventEmitter.getBakedAnimationState('Idle')).toMatchObject({
+        name: 'Idle',
+        channels: [
+          { channel: 'face', trackCount: 2, playable: true, blendMode: 'additive' },
+          { channel: 'body', trackCount: 8, playable: true, blendMode: 'replace' },
+          { channel: 'scene', trackCount: 1, playable: false },
+        ],
+        requestedBlendMode: 'replace',
+        blendMode: 'replace',
       });
     });
 
@@ -612,6 +901,72 @@ describe('AnimationService', () => {
         loopMode: 'pingpong',
         balance: 0.3,
         easing: 'easeInOut',
+      });
+    });
+
+    it('replays the requested blend mode while preserving Loom3 effective blend state', () => {
+      const bakedHandle = {
+        getState: vi.fn(() => ({
+          name: 'Idle',
+          source: 'baked',
+          time: 0,
+          duration: 4,
+          speed: 1,
+          playbackRate: 1,
+          reverse: false,
+          weight: 1,
+          requestedBlendMode: 'additive',
+          blendMode: 'replace',
+          balance: 0,
+          easing: 'linear',
+          loop: true,
+          loopMode: 'repeat',
+          isPlaying: true,
+          isPaused: false,
+          isLooping: true,
+          channels: [
+            { channel: 'body', trackCount: 5, playable: true, blendMode: 'replace' },
+          ],
+        })),
+        finished: Promise.resolve(),
+      };
+
+      const bakedEngine = {
+        getAnimationClips: vi.fn(() => [{
+          name: 'Idle',
+          duration: 4,
+          channels: [
+            { channel: 'body', trackCount: 5, playable: true, blendMode: 'replace' },
+          ],
+        }]),
+        getPlayingAnimations: vi.fn(() => []),
+        playAnimation: vi.fn(() => bakedHandle),
+        stopAnimation: vi.fn(),
+        pauseAnimation: vi.fn(),
+        resumeAnimation: vi.fn(),
+        setAnimationSpeed: vi.fn(),
+        setAnimationIntensity: vi.fn(),
+        setAnimationLoopMode: vi.fn(),
+        setAnimationRepeatCount: vi.fn(),
+        setAnimationReverse: vi.fn(),
+        setAnimationBlendMode: vi.fn(),
+        seekAnimation: vi.fn(),
+        stopAllAnimations: vi.fn(),
+      };
+
+      service.setBakedAnimationEngine(bakedEngine as any);
+      service.setBakedAnimationBlendMode('Idle', 'additive');
+      service.playBakedAnimation('Idle');
+
+      expect(bakedEngine.playAnimation).toHaveBeenCalledWith('Idle', expect.objectContaining({
+        blendMode: 'additive',
+      }));
+      expect(animationEventEmitter.getBakedAnimationState('Idle')).toMatchObject({
+        requestedBlendMode: 'additive',
+        blendMode: 'replace',
+        channels: [
+          { channel: 'body', trackCount: 5, playable: true, blendMode: 'replace' },
+        ],
       });
     });
 

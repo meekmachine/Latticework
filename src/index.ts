@@ -20,6 +20,14 @@ export type {
 export {
   preloadAllSnippets,
   clearPreloadedSnippets,
+  getAvailableSnippetNames,
+  getBundledSnippetNames,
+  getStoredSnippetNames,
+  resolveSnippetEntry,
+} from './animation/snippetPreloader';
+export type {
+  ResolvedSnippetEntry,
+  SnippetCategoryKey,
 } from './animation/snippetPreloader';
 export type {
   AIExpressionInterpretationMetadata,

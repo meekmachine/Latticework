@@ -1,7 +1,7 @@
 /**
  * Prosodic Expression Machine (XState)
  * State machine for managing prosodic gestures (brow raises, head nods)
- * Follows the same pattern as animationMachine.ts
+ * Follows the agency machine pattern used by scheduler-backed agencies.
  */
 
 import { createMachine, assign } from 'xstate';
