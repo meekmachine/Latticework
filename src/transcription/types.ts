@@ -10,6 +10,8 @@ export interface TranscriptionConfig {
   maxAlternatives?: number;
   agentFilteringEnabled?: boolean;
   interruptDetectionEnabled?: boolean;
+  /** Require a live agent playback reference before emitting audio interruptions. */
+  requireAgentReferenceForInterruption?: boolean;
   interruptionDebugLogging?: boolean;
   interruptionVolumeThreshold?: number;
   interruptionReferenceScale?: number;
@@ -72,6 +74,7 @@ export const DEFAULT_TRANSCRIPTION_CONFIG: Required<TranscriptionConfig> = {
   maxAlternatives: 1,
   agentFilteringEnabled: true,
   interruptDetectionEnabled: true,
+  requireAgentReferenceForInterruption: true,
   interruptionDebugLogging: false,
   interruptionVolumeThreshold: 0.035,
   interruptionReferenceScale: 0.45,

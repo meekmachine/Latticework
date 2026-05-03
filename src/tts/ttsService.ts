@@ -3,7 +3,7 @@
  * Main Text-to-Speech service facade
  *
  * Handles speech synthesis and coordinates lip sync internally.
- * Supports both legacy LipSync service and experimental Vocal service.
+ * Uses the Vocal service as the only active lip-sync runtime.
  */
 
 import type {
@@ -15,6 +15,7 @@ import type {
   SAPIResponse,
   VisemeID,
   SpeakResult,
+  PlaybackReferenceStatus,
 } from './types';
 import {
   parseTokens,
@@ -23,9 +24,8 @@ import {
   decodeBase64Audio,
   getTimelineDuration
 } from './utils';
-import { createLipSyncService, type LipSyncServiceAPI } from '../lipsync';
-import { azureVisemesToTimeline, normalizeAzureVisemes, type AzureVisemeLike } from '../lipsync/azureVisemeMapping';
-import { createVocalService, type VocalService } from '../vocal';
+import { azureVisemesToTimeline, type AzureVisemeLike } from '../lipsync/azureVisemeMapping';
+import { createVocalService, type VocalService, type VocalTimeline } from '../vocal';
 import { requireBackendBaseUrl } from '../config/backendUrl';
 
 interface AzureViseme {
@@ -47,6 +47,11 @@ interface AzureTTSSynthesizeResponse {
   word_boundaries: AzureWordBoundary[];
   duration: number;
 }
+
+// Human speech animation reads best when the mouth shape anticipates the sound
+// slightly; keep this visual-only so word-boundary/audio clocks stay exact.
+const AZURE_VOCAL_VISUAL_LEAD_MS = 35;
+
 export class TTSService {
   private config: Required<TTSConfig>;
   private state: TTSState;
@@ -61,6 +66,8 @@ export class TTSService {
   private audioContext: AudioContext | null = null;
   private audioSource: AudioBufferSourceNode | null = null;
   private playbackReferenceDestination: MediaStreamAudioDestinationNode | null = null;
+  private displayMediaReferenceStream: MediaStream | null = null;
+  private displayMediaReferenceTrack: MediaStreamTrack | null = null;
 
   // Timeline execution
   private timelineTimeouts: number[] = [];
@@ -70,9 +77,9 @@ export class TTSService {
   private currentSpeechPromise: Promise<SpeakResult> | null = null;
   private currentSpeechSettled = false;
   private playbackStartListeners = new Set<() => void>();
+  private playbackReferenceTrackListeners = new Set<(track: MediaStreamTrack | null) => void>();
 
-  // Lip sync services (managed internally)
-  private lipSyncService: LipSyncServiceAPI | null = null;
+  // Lip sync service (managed internally)
   private vocalService: VocalService | null = null;
   private wordIndex: number = 0;
 
@@ -86,12 +93,13 @@ export class TTSService {
       pitch: config.pitch ?? 1.0,
       volume: config.volume ?? 1.0,
       voiceName: config.voiceName ?? '',
+      lang: config.lang ?? '',
       backendUrl: config.backendUrl ?? requireBackendBaseUrl(),
       azureApiKey: config.azureApiKey ?? '',
       azureRegion: config.azureRegion ?? '',
       azureStyle: config.azureStyle ?? '',
       azureStyleDegree: config.azureStyleDegree ?? null,
-      useExperimentalVocal: config.useExperimentalVocal ?? false,
+      webSpeechReferenceMode: config.webSpeechReferenceMode ?? 'none',
       lipsyncIntensity: config.lipsyncIntensity ?? 1.0,
       jawScale: config.jawScale ?? 1.0,
       animationAgency: config.animationAgency ?? undefined,
@@ -100,7 +108,8 @@ export class TTSService {
     this.callbacks = callbacks;
 
     this.state = {
-      status: 'idle'
+      status: 'idle',
+      playbackReferenceStatus: 'unavailable',
     };
 
     this.initialize();
@@ -123,7 +132,7 @@ export class TTSService {
   }
 
   /**
-   * Initialize lip sync service based on config
+   * Initialize the only active lip-sync runtime.
    */
   private initLipSync(): void {
     if (!this.config.animationAgency) {
@@ -131,38 +140,13 @@ export class TTSService {
       return;
     }
 
-    if (this.config.useExperimentalVocal) {
-      // Use experimental Vocal service (Effect/MostJS based)
-      console.log('[TTS] Using experimental Vocal service for lip sync');
-      console.log('[TTS] Vocal config:', {
-        intensity: this.config.lipsyncIntensity,
-        speechRate: this.config.rate,
-        jawScale: this.config.jawScale,
-        hasAnimationAgency: !!this.config.animationAgency,
-      });
-      this.vocalService = createVocalService({
-        intensity: this.config.lipsyncIntensity,
-        speechRate: this.config.rate,
-        jawScale: this.config.jawScale,
-        animationAgency: this.config.animationAgency,
-      });
-      console.log('[TTS] Vocal service created:', !!this.vocalService);
-    } else {
-      // Use legacy LipSync service (XState based)
-      console.log('[TTS] Using legacy LipSync service for lip sync');
-      this.lipSyncService = createLipSyncService(
-        {
-          lipsyncIntensity: this.config.lipsyncIntensity,
-          speechRate: this.config.rate,
-          jawScale: this.config.jawScale,
-        },
-        {},
-        {
-          scheduleSnippet: (snippet) => this.config.animationAgency!.schedule(snippet),
-          removeSnippet: (name) => this.config.animationAgency!.remove(name),
-        }
-      );
-    }
+    console.log('[TTS] Using Vocal service for lip sync');
+    this.vocalService = createVocalService({
+      intensity: this.config.lipsyncIntensity,
+      speechRate: this.config.rate,
+      jawScale: this.config.jawScale,
+      animationAgency: this.config.animationAgency,
+    });
   }
 
   /**
@@ -307,7 +291,31 @@ export class TTSService {
   }
 
   public getPlaybackReferenceTrack(): MediaStreamTrack | null {
+    if (this.displayMediaReferenceTrack?.readyState === 'live') {
+      return this.displayMediaReferenceTrack;
+    }
+
     return this.playbackReferenceDestination?.stream.getAudioTracks()[0] ?? null;
+  }
+
+  public getPlaybackReferenceStatus(): PlaybackReferenceStatus {
+    return this.state.playbackReferenceStatus ?? 'unavailable';
+  }
+
+  public async preparePlaybackReference(): Promise<PlaybackReferenceStatus> {
+    if (this.config.engine === 'webSpeech' && this.config.webSpeechReferenceMode === 'displayMedia') {
+      await this.ensureWebSpeechDisplayMediaReference();
+    }
+
+    return this.getPlaybackReferenceStatus();
+  }
+
+  public onPlaybackReferenceTrackChange(listener: (track: MediaStreamTrack | null) => void): () => void {
+    this.playbackReferenceTrackListeners.add(listener);
+    listener(this.getPlaybackReferenceTrack());
+    return () => {
+      this.playbackReferenceTrackListeners.delete(listener);
+    };
   }
 
   public onPlaybackStart(listener: () => void): () => void {
@@ -322,6 +330,11 @@ export class TTSService {
     this.playbackStartListeners.forEach((listener) => listener());
   }
 
+  private emitPlaybackReferenceTrackChange(): void {
+    const track = this.getPlaybackReferenceTrack();
+    this.playbackReferenceTrackListeners.forEach((listener) => listener(track));
+  }
+
   private ensureAudioContext(): AudioContext {
     if (!this.audioContext || this.audioContext.state === 'closed') {
       this.audioContext = new AudioContext();
@@ -331,6 +344,87 @@ export class TTSService {
     }
 
     return this.audioContext;
+  }
+
+  private setPlaybackReferenceStatus(status: PlaybackReferenceStatus): void {
+    this.setState({ playbackReferenceStatus: status });
+    this.callbacks.onPlaybackReferenceStatusChange?.(status);
+  }
+
+  private clearDisplayMediaReference(status: PlaybackReferenceStatus = 'unavailable'): void {
+    const stream = this.displayMediaReferenceStream;
+    this.displayMediaReferenceTrack = null;
+    this.displayMediaReferenceStream = null;
+
+    stream?.getTracks().forEach((track) => {
+      track.onended = null;
+      if (track.readyState === 'live') {
+        track.stop();
+      }
+    });
+
+    this.emitPlaybackReferenceTrackChange();
+    this.setPlaybackReferenceStatus(status);
+  }
+
+  private async ensureWebSpeechDisplayMediaReference(): Promise<void> {
+    if (this.config.engine !== 'webSpeech') return;
+    if (this.config.webSpeechReferenceMode !== 'displayMedia') return;
+    if (this.displayMediaReferenceTrack?.readyState === 'live') return;
+
+    if (this.displayMediaReferenceStream) {
+      this.clearDisplayMediaReference();
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
+      console.warn('[TTS] Display media capture is not supported; Web Speech playback reference unavailable');
+      this.setPlaybackReferenceStatus('unavailable');
+      return;
+    }
+
+    this.setPlaybackReferenceStatus('requesting');
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+        preferCurrentTab: true,
+        selfBrowserSurface: 'include',
+        systemAudio: 'include',
+        surfaceSwitching: 'exclude',
+      } as DisplayMediaStreamOptions & {
+        preferCurrentTab?: boolean;
+        selfBrowserSurface?: 'include' | 'exclude';
+        systemAudio?: 'include' | 'exclude';
+        surfaceSwitching?: 'include' | 'exclude';
+      });
+
+      const audioTrack = stream.getAudioTracks()[0] ?? null;
+      if (!audioTrack) {
+        stream.getTracks().forEach((track) => track.stop());
+        console.warn('[TTS] Display capture did not include audio; Web Speech playback reference unavailable');
+        this.setPlaybackReferenceStatus('no-audio');
+        return;
+      }
+
+      this.displayMediaReferenceStream = stream;
+      this.displayMediaReferenceTrack = audioTrack;
+      stream.getTracks().forEach((track) => {
+        track.onended = () => this.clearDisplayMediaReference('ended');
+      });
+      this.emitPlaybackReferenceTrackChange();
+      this.setPlaybackReferenceStatus('available');
+      console.info('[TTS] Using display media audio as experimental Web Speech playback reference');
+    } catch (error) {
+      const name = error instanceof DOMException ? error.name : '';
+      const status: PlaybackReferenceStatus = name === 'NotAllowedError' ? 'denied' : 'failed';
+      this.setPlaybackReferenceStatus(status);
+      console.warn('[TTS] Display media reference capture failed; continuing without Web Speech playback reference:', error);
+    }
   }
 
   /**
@@ -347,18 +441,31 @@ export class TTSService {
     // Build timeline
     const timeline = buildLocalTimeline(text, emojis, this.config.rate);
     this.setState({ currentTimeline: timeline });
+    const speechToken = this.speechToken;
 
     // Create utterance
     this.utterance = new SpeechSynthesisUtterance(text);
     this.utterance.rate = this.config.rate;
     this.utterance.pitch = this.config.pitch;
     this.utterance.volume = this.config.volume;
+    if (this.config.lang) {
+      this.utterance.lang = this.config.lang;
+    }
 
     // Set voice
     if (this.config.voiceName) {
       const voice = this.voices.find(v => v.name === this.config.voiceName);
       if (voice) {
         this.utterance.voice = voice;
+      } else {
+        console.warn('[TTS] Web Speech voice not found; browser will use its default voice', {
+          requestedVoice: this.config.voiceName,
+          requestedLang: this.config.lang,
+          availableVoices: this.voices.map((availableVoice) => ({
+            name: availableVoice.name,
+            lang: availableVoice.lang,
+          })),
+        });
       }
     }
 
@@ -367,71 +474,52 @@ export class TTSService {
 
     // Set up event handlers
     this.utterance.onstart = () => {
+      if (speechToken !== this.speechToken) return;
       this.setState({ status: 'speaking' });
       this.emitPlaybackStart();
       this.executeTimeline(timeline);
 
-      // Start lip sync - sentence-level for experimental vocal, legacy for lipSyncService
-      if (this.config.useExperimentalVocal && this.vocalService) {
-        console.log(`[TTS] Starting sentence-level lip sync for: "${text}"`);
-        this.vocalService.startSentence(text);
-      } else if (this.lipSyncService) {
-        this.lipSyncService.startSpeech();
-      }
+      console.log(`[TTS] Starting Vocal lip sync for: "${text}"`);
+      this.vocalService?.startSentence(text);
     };
 
     this.utterance.onend = () => {
+      if (speechToken !== this.speechToken) return;
       this.setState({ status: 'idle' });
       this.callbacks.onEnd?.();
       this.clearTimelineTimeouts();
+      this.utterance = null;
       this.finishSpeechLifecycle({ interrupted: false });
 
-      // End lip sync
-      if (this.config.useExperimentalVocal && this.vocalService) {
-        this.vocalService.stop();
-      } else if (this.lipSyncService) {
-        this.lipSyncService.endSpeech();
-      }
+      this.vocalService?.stop();
     };
 
     this.utterance.onerror = (event) => {
+      if (speechToken !== this.speechToken) return;
       console.error('Speech synthesis error:', event);
       this.setState({ status: 'error', error: event.error });
       this.callbacks.onError?.(new Error(event.error));
       this.clearTimelineTimeouts();
+      this.utterance = null;
       this.finishSpeechLifecycle({ interrupted: false });
 
-      // Stop lip sync on error
-      if (this.config.useExperimentalVocal && this.vocalService) {
-        this.vocalService.stop();
-      } else if (this.lipSyncService) {
-        this.lipSyncService.stop();
-      }
+      this.vocalService?.stop();
     };
 
     this.utterance.onboundary = (event) => {
+      if (speechToken !== this.speechToken) return;
       if (event.name === 'word') {
         const word = text.substring(event.charIndex, event.charIndex + event.charLength);
 
-        console.log(`[TTS] onboundary word: "${word}", useExperimental: ${this.config.useExperimentalVocal}, hasVocal: ${!!this.vocalService}, hasLipSync: ${!!this.lipSyncService}`);
+        console.log(`[TTS] onboundary word: "${word}", hasVocal: ${!!this.vocalService}`);
 
         // Notify lip sync of word boundary (for sync verification, not clip creation)
         if (word) {
-          if (this.config.useExperimentalVocal && this.vocalService) {
-            // Sentence-level: just notify word boundary, clip already playing
-            console.log(`[TTS] Notifying vocalService.onWordBoundary("${word}", ${this.wordIndex})`);
-            this.vocalService.onWordBoundary(
-              word,
-              this.wordIndex,
-              typeof event.elapsedTime === 'number' ? event.elapsedTime : undefined
-            );
-          } else if (this.lipSyncService) {
-            // Legacy: process word creates per-word snippets
-            console.log(`[TTS] Calling lipSyncService.processWord("${word}", ${this.wordIndex})`);
-            this.lipSyncService.processWord(word, this.wordIndex);
-          } else {
-            console.warn(`[TTS] No lip sync service available for word: "${word}"`);
-          }
+          this.vocalService?.onWordBoundary(
+            word,
+            this.wordIndex,
+            typeof event.elapsedTime === 'number' ? event.elapsedTime : undefined
+          );
         }
 
         // Fire callback for external use (prosodic gestures, etc.)
@@ -487,27 +575,15 @@ export class TTSService {
       this.clearTimelineTimeouts();
       this.finishSpeechLifecycle({ interrupted: false });
 
-      // End lip sync
-      if (this.config.useExperimentalVocal && this.vocalService) {
-        this.vocalService.stop();
-      } else if (this.lipSyncService) {
-        this.lipSyncService.endSpeech();
-      }
+      this.vocalService?.stop();
     };
 
     // Start playback
     this.setState({ status: 'speaking' });
-
-    // Start lip sync - sentence-level for experimental vocal, legacy for lipSyncService
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      console.log(`[TTS SAPI] Starting sentence-level lip sync for: "${text}"`);
-      this.vocalService.startSentence(text);
-    } else if (this.lipSyncService) {
-      this.lipSyncService.startSpeech();
-    }
-
     this.audioSource.start();
     this.emitPlaybackStart();
+    console.log(`[TTS SAPI] Starting Vocal lip sync for: "${text}"`);
+    this.vocalService?.startSentence(text);
     this.executeTimeline(timeline);
   }
 
@@ -602,34 +678,26 @@ export class TTSService {
       this.finishSpeechLifecycle({ interrupted: false });
     };
 
-    // Start experimental Azure lip sync from Azure visemes when available.
-    // Fall back to text-derived sentence timing so the new Vocal path still animates
-    // if the external viseme schedule fails for any utterance.
-    let snippetName: string | null;
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      snippetName = this.processExternalVisemes(result.visemes, durationSec);
-      if (!snippetName) {
-        console.warn('[TTS Azure] Azure visemes did not schedule; falling back to sentence-derived Vocal timing');
-        snippetName = this.vocalService.startSentence(text);
-      }
-    } else {
-      this.startExternalSpeech();
-      snippetName = this.processExternalVisemes(result.visemes, durationSec);
-    }
+    // Start playback
+    this.setState({ status: 'speaking' });
 
-    if (snippetName && this.config.animationAgency?.setSnippetTime) {
-      this.config.animationAgency.setSnippetTime(snippetName, 0);
-    }
+    this.clearTimelineTimeouts();
 
     if (audioContext.state === 'suspended') {
       await audioContext.resume();
     }
 
     // Start playback
-    this.setState({ status: 'speaking' });
     this.audioSource.start();
     this.emitPlaybackStart();
-    this.clearTimelineTimeouts();
+
+    const snippetName = this.startExternalTimeline(this.buildAzureVocalTimeline(text, result, durationSec))
+      ?? this.vocalService?.startSentence(text)
+      ?? null;
+
+    if (snippetName && this.config.animationAgency?.setSnippetTime) {
+      this.config.animationAgency.setSnippetTime(snippetName, 0);
+    }
     this.executeTimeline(timeline);
   }
 
@@ -654,7 +722,9 @@ export class TTSService {
       });
     }
 
-    const visemeTimeline = azureVisemesToTimeline(result.visemes || [], totalDurationMs);
+    const visemeTimeline = azureVisemesToTimeline(result.visemes || [], totalDurationMs, {
+      wordTimings: result.word_boundaries || [],
+    });
     for (const viseme of visemeTimeline) {
       timeline.push({
         type: 'VISEME',
@@ -679,6 +749,29 @@ export class TTSService {
 
     timeline.sort((a, b) => a.offsetMs - b.offsetMs);
     return timeline;
+  }
+
+  private buildAzureVocalTimeline(
+    text: string,
+    result: AzureTTSSynthesizeResponse,
+    durationSec: number
+  ): VocalTimeline {
+    const totalDurationMs = Math.max(0, Math.round(durationSec * 1000));
+    return {
+      name: `azure_vocal_${Date.now()}`,
+      text,
+      visemes: azureVisemesToTimeline(result.visemes || [], totalDurationMs, {
+        wordTimings: result.word_boundaries || [],
+        visualLeadMs: AZURE_VOCAL_VISUAL_LEAD_MS,
+      }),
+      wordTimings: (result.word_boundaries || []).map((boundary) => ({
+        word: boundary.word,
+        startSec: boundary.start_time,
+        endSec: boundary.end_time,
+      })),
+      durationSec,
+      source: 'azure',
+    };
   }
 
   /**
@@ -709,7 +802,9 @@ export class TTSService {
    */
   private executeTimeline(timeline: TimelineEvent[]): void {
     this.clearTimelineTimeouts();
-    this.timelineStartTime = Date.now();
+    this.timelineStartTime = this.audioContext
+      ? this.audioContext.currentTime
+      : performance.now() / 1000;
 
     for (const event of timeline) {
       const timeout = window.setTimeout(() => {
@@ -729,12 +824,7 @@ export class TTSService {
         // For Web Speech API, lip sync is handled by onboundary (accurate timing).
         // Only process WORD events from timeline for SAPI mode where onboundary doesn't fire.
         if (this.config.engine === 'sapi' || this.config.engine === 'azure') {
-          if (this.config.useExperimentalVocal && this.vocalService) {
-            // Sentence-level: just notify word boundary (sentence started in speakSAPI)
-            this.vocalService.onWordBoundary(event.word, this.wordIndex, event.offsetMs / 1000);
-          } else if (this.lipSyncService) {
-            this.lipSyncService.processWord(event.word, this.wordIndex);
-          }
+          this.vocalService?.onWordBoundary(event.word, this.wordIndex, this.getTimelineElapsedSec(event));
           this.callbacks.onBoundary?.({
             word: event.word,
             charIndex: event.index
@@ -757,6 +847,14 @@ export class TTSService {
         // Phoneme events for advanced lip-sync
         break;
     }
+  }
+
+  private getTimelineElapsedSec(event: TimelineEvent): number {
+    if (this.audioContext) {
+      return Math.max(0, this.audioContext.currentTime - this.timelineStartTime);
+    }
+
+    return event.offsetMs / 1000;
   }
 
   /**
@@ -789,12 +887,7 @@ export class TTSService {
       this.audioSource = null;
     }
 
-    // Stop lip sync
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      this.vocalService.stop();
-    } else if (this.lipSyncService) {
-      this.lipSyncService.stop();
-    }
+    this.vocalService?.stop();
 
     this.clearTimelineTimeouts();
     this.setState({ status: 'idle' });
@@ -855,23 +948,13 @@ export class TTSService {
    * Update configuration
    */
   public updateConfig(config: Partial<TTSConfig>): void {
-    const prevUseExperimental = this.config.useExperimentalVocal;
+    const prevWebSpeechReferenceMode = this.config.webSpeechReferenceMode;
     this.config = { ...this.config, ...config };
 
-    // If useExperimentalVocal changed, reinitialize lip sync
-    if (config.useExperimentalVocal !== undefined && config.useExperimentalVocal !== prevUseExperimental) {
-      this.disposeLipSync();
-      this.initLipSync();
+    if (config.webSpeechReferenceMode !== undefined && config.webSpeechReferenceMode !== prevWebSpeechReferenceMode) {
+      this.clearDisplayMediaReference();
     }
 
-    // Update lip sync config
-    if (this.lipSyncService) {
-      this.lipSyncService.updateConfig({
-        speechRate: this.config.rate,
-        lipsyncIntensity: this.config.lipsyncIntensity,
-        jawScale: this.config.jawScale,
-      });
-    }
     if (this.vocalService) {
       this.vocalService.updateConfig({
         speechRate: this.config.rate,
@@ -885,10 +968,6 @@ export class TTSService {
    * Dispose lip sync services
    */
   private disposeLipSync(): void {
-    if (this.lipSyncService) {
-      this.lipSyncService.dispose();
-      this.lipSyncService = null;
-    }
     if (this.vocalService) {
       this.vocalService.dispose();
       this.vocalService = null;
@@ -901,9 +980,7 @@ export class TTSService {
    */
   public startExternalSpeech(): void {
     this.wordIndex = 0;
-    if (this.lipSyncService) {
-      this.lipSyncService.startSpeech();
-    }
+    this.vocalService?.stop();
   }
 
   /**
@@ -912,12 +989,8 @@ export class TTSService {
    */
   public startExternalSentence(text: string): void {
     this.wordIndex = 0;
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      console.log(`[TTS External] Starting sentence-level lip sync for: "${text}"`);
-      this.vocalService.startSentence(text);
-    } else if (this.lipSyncService) {
-      this.lipSyncService.startSpeech();
-    }
+    console.log(`[TTS External] Starting Vocal lip sync for: "${text}"`);
+    this.vocalService?.startSentence(text);
   }
 
   /**
@@ -925,12 +998,7 @@ export class TTSService {
    * Call this for each word boundary from external TTS engines
    */
   public processExternalWord(word: string, elapsedSec?: number): void {
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      // Sentence-level: just notify word boundary
-      this.vocalService.onWordBoundary(word, this.wordIndex, elapsedSec);
-    } else if (this.lipSyncService) {
-      this.lipSyncService.processWord(word, this.wordIndex);
-    }
+    this.vocalService?.onWordBoundary(word, this.wordIndex, elapsedSec);
     this.callbacks.onBoundary?.({
       word,
       charIndex: this.wordIndex,
@@ -940,7 +1008,6 @@ export class TTSService {
 
   /**
    * Process external viseme events (e.g., Azure TTS visemes)
-   * Uses experimental Vocal service when enabled, otherwise legacy LipSync scheduler.
    * @returns Scheduled snippet name if available (useful for debug), otherwise null.
    */
   public processExternalVisemes(visemes: AzureVisemeLike[], totalDurationSec?: number): string | null {
@@ -950,20 +1017,20 @@ export class TTSService {
       ? Math.max(0, Math.round(totalDurationSec * 1000))
       : undefined;
 
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      const timeline = azureVisemesToTimeline(visemes, totalDurationMs);
-      if (timeline.length === 0) return null;
-      // Vocal service expects ARKit/CC4 viseme IDs (0-14) with timing.
-      return this.vocalService.processVisemeEvents(timeline as any, `azure_visemes_${Date.now()}`);
-    }
+    return this.startExternalTimeline({
+      name: `azure_visemes_${Date.now()}`,
+      visemes: azureVisemesToTimeline(visemes, totalDurationMs),
+      durationSec: totalDurationSec,
+      source: 'azure',
+    });
+  }
 
-    if (this.lipSyncService) {
-      const normalized = normalizeAzureVisemes(visemes);
-      if (normalized.length === 0) return null;
-      return this.lipSyncService.processAzureVisemes?.(normalized, totalDurationMs) ?? null;
-    }
-
-    return null;
+  /**
+   * Start an externally timed vocal timeline.
+   */
+  public startExternalTimeline(timeline: VocalTimeline): string | null {
+    this.wordIndex = 0;
+    return this.vocalService?.startTimeline(timeline) ?? null;
   }
 
   /**
@@ -971,11 +1038,7 @@ export class TTSService {
    * Call this when external audio playback ends
    */
   public endExternalSpeech(): void {
-    if (this.config.useExperimentalVocal && this.vocalService) {
-      this.vocalService.stop();
-    } else if (this.lipSyncService) {
-      this.lipSyncService.endSpeech();
-    }
+    this.vocalService?.stop();
   }
 
   /**
@@ -984,7 +1047,9 @@ export class TTSService {
   public dispose(): void {
     this.stop();
     this.disposeLipSync();
+    this.clearDisplayMediaReference();
     this.playbackStartListeners.clear();
+    this.playbackReferenceTrackListeners.clear();
 
     if (this.audioContext) {
       this.audioContext.close();

@@ -211,6 +211,7 @@ export class ConversationService implements ConversationServiceAPI {
       if (agentSpeechNotified || !this.agentSpeechActive) return;
       agentSpeechNotified = true;
       this.context.speakStartTime = Date.now();
+      this.syncAgentAudioReferenceTrack();
       this.transcription.notifyAgentSpeech?.(text);
     };
     const unsubscribePlaybackStart = this.tts.onPlaybackStart(markAgentPlaybackStarted);
@@ -481,8 +482,14 @@ export function createConversationService(
 
   const unsubscribeInterruption = transcription.onInterruption((event) => service.receiveAudioInterruption(event));
   const unsubscribeTranscript = transcription.onTranscript((text, isFinal) => service.receiveTranscript(text, isFinal));
+  const unsubscribeReferenceTrack = tts.onPlaybackReferenceTrackChange?.((track) => {
+    transcription.setAgentAudioReferenceTrack?.(track);
+  });
   service.addSubscriptionCleanup(unsubscribeInterruption);
   service.addSubscriptionCleanup(unsubscribeTranscript);
+  if (unsubscribeReferenceTrack) {
+    service.addSubscriptionCleanup(unsubscribeReferenceTrack);
+  }
 
   return service;
 }

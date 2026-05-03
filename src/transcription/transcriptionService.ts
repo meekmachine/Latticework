@@ -39,6 +39,7 @@ export class TranscriptionService {
   private interruptionCandidateStart: number | null = null;
   private interruptionLatched = false;
   private lastInterruptionDebugAt = 0;
+  private agentReferenceUpdateToken = 0;
 
   // Agent speech filtering
   private agentWordSet = new Set<string>();
@@ -137,6 +138,11 @@ export class TranscriptionService {
     // Handle errors
     this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       console.warn('[TranscriptionService] Recognition error:', event.error);
+
+      if (this.isManualStop && event.error === 'aborted') {
+        this.setState({ status: 'idle' });
+        return;
+      }
 
       this.setState({
         status: 'error',
@@ -261,24 +267,49 @@ export class TranscriptionService {
   }
 
   private async updateAgentReferenceAnalyser(): Promise<void> {
+    const updateToken = ++this.agentReferenceUpdateToken;
+    const referenceTrack = this.agentReferenceTrack;
+
     this.agentSourceNode?.disconnect();
     this.agentAnalyser?.disconnect();
     this.agentSourceNode = null;
     this.agentAnalyser = null;
     this.agentReferenceStream = null;
 
-    if (!this.agentReferenceTrack) {
+    if (!referenceTrack || referenceTrack.readyState !== 'live') {
       return;
     }
 
     const analysisContext = await this.ensureAnalysisContext();
-    this.agentReferenceStream = new MediaStream([this.agentReferenceTrack]);
-    this.agentSourceNode = analysisContext.createMediaStreamSource(this.agentReferenceStream);
-    this.agentAnalyser = analysisContext.createAnalyser();
-    this.agentAnalyser.fftSize = 2048;
-    this.agentAnalyser.smoothingTimeConstant = 0.65;
-    this.agentSourceNode.connect(this.agentAnalyser);
-    this.agentAnalyserData = new Uint8Array(this.agentAnalyser.fftSize);
+    if (
+      updateToken !== this.agentReferenceUpdateToken ||
+      this.agentReferenceTrack !== referenceTrack ||
+      referenceTrack.readyState !== 'live'
+    ) {
+      return;
+    }
+
+    const referenceStream = new MediaStream([referenceTrack]);
+    const sourceNode = analysisContext.createMediaStreamSource(referenceStream);
+    const analyser = analysisContext.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.65;
+    sourceNode.connect(analyser);
+
+    if (
+      updateToken !== this.agentReferenceUpdateToken ||
+      this.agentReferenceTrack !== referenceTrack ||
+      referenceTrack.readyState !== 'live'
+    ) {
+      sourceNode.disconnect();
+      analyser.disconnect();
+      return;
+    }
+
+    this.agentReferenceStream = referenceStream;
+    this.agentSourceNode = sourceNode;
+    this.agentAnalyser = analyser;
+    this.agentAnalyserData = new Uint8Array(analyser.fftSize);
   }
 
   private readLevel(analyser: AnalyserNode | null, data: Uint8Array): number {
@@ -321,8 +352,17 @@ export class TranscriptionService {
         return;
       }
 
+      const hasAgentReference = this.agentReferenceTrack?.readyState === 'live' && !!this.agentAnalyser;
+      if (this.config.requireAgentReferenceForInterruption && !hasAgentReference) {
+        this.interruptionCandidateStart = null;
+        this.interruptionFrame = window.requestAnimationFrame(tick);
+        return;
+      }
+
       const microphoneLevel = this.readLevel(this.micAnalyser, this.micAnalyserData);
-      const referenceLevel = this.readLevel(this.agentAnalyser, this.agentAnalyserData);
+      const referenceLevel = hasAgentReference
+        ? this.readLevel(this.agentAnalyser, this.agentAnalyserData)
+        : 0;
       const requiredLevel = Math.max(
         this.config.interruptionVolumeThreshold,
         referenceLevel * this.config.interruptionReferenceScale + this.config.interruptionReferenceOffset
@@ -338,6 +378,7 @@ export class TranscriptionService {
             referenceLevel,
             requiredLevel,
             shouldInterrupt,
+            hasAgentReference,
           });
         }
       }

@@ -15,11 +15,18 @@
  * - Clean, minimal API
  */
 
-import type { VocalConfig, VocalSnippet, VisemeEvent, WordTiming } from './types';
+import type {
+  VocalConfig,
+  VocalSnippet,
+  VocalTimeline,
+  VocalWordTiming,
+  VisemeEvent,
+  WordTiming,
+} from './types';
 import { DEFAULT_VOCAL_CONFIG } from './types';
 import { VocalStateStore } from './state';
 import { textToVisemes, wordToVisemes } from './phonemes';
-import { buildVocalSnippet, buildTextSnippet } from './snippetBuilder';
+import { buildVocalSnippet } from './snippetBuilder';
 
 /** Tracks a sentence being spoken */
 interface SentenceContext {
@@ -28,7 +35,7 @@ interface SentenceContext {
   startTime: number;
   maxTime: number;
   wordIndex: number;
-  wordTimings: Array<{ word: string; startSec: number; endSec: number }>;
+  wordTimings: VocalWordTiming[];
 }
 
 const WORD_SYNC_DRIFT_THRESHOLD_SEC = 0.06;
@@ -69,6 +76,49 @@ export class VocalService {
   // ───────────────────────────────────────────────────────────────────────────
 
   /**
+   * Start a precomputed utterance timeline.
+   *
+   * Provider timelines are already time-scaled, so snippet playback stays neutral.
+   * Word timings are kept with the sentence context for drift correction.
+   */
+  startTimeline(timeline: VocalTimeline): string | null {
+    if (timeline.visemes.length === 0) return null;
+
+    if (this.currentSentence) {
+      this.stopSentence();
+    }
+
+    const snippetName = timeline.name ?? this.buildTimelineName(timeline);
+    const snippet = buildVocalSnippet(
+      timeline.visemes,
+      { ...this.config, speechRate: 1.0 },
+      snippetName
+    );
+
+    if (typeof timeline.durationSec === 'number' && Number.isFinite(timeline.durationSec)) {
+      snippet.maxTime = Math.max(snippet.maxTime, Math.max(0, timeline.durationSec));
+    }
+
+    console.log(
+      `[Vocal] Built timeline snippet: source=${timeline.source ?? 'unknown'}, maxTime=${snippet.maxTime.toFixed(3)}s, curves=${Object.keys(snippet.curves).length}`
+    );
+
+    const name = this.scheduleSnippet(snippet, timeline.visemes);
+    if (!name) return null;
+
+    this.currentSentence = {
+      name,
+      text: timeline.text ?? timeline.name ?? `${timeline.source ?? 'external'}_visemes`,
+      startTime: performance.now(),
+      maxTime: snippet.maxTime,
+      wordIndex: 0,
+      wordTimings: this.normalizeWordTimings(timeline.wordTimings),
+    };
+
+    return name;
+  }
+
+  /**
    * Start speaking a sentence - creates one clip for the entire utterance
    *
    * @param text - The full sentence/utterance to speak
@@ -77,42 +127,22 @@ export class VocalService {
   startSentence(text: string): string | null {
     if (!text.trim()) return null;
 
-    // Stop any previous sentence
-    if (this.currentSentence) {
-      this.stopSentence();
-    }
-
     console.log(`[Vocal] startSentence: "${text}"`);
 
-    // Generate visemes for entire sentence
-    const events = textToVisemes(text, this.config.speechRate ?? 1.0);
+    const speechRate = this.config.speechRate ?? 1.0;
+    const events = textToVisemes(text, speechRate);
     if (events.length === 0) {
       console.warn(`[Vocal] No viseme events for sentence: "${text}"`);
       return null;
     }
 
-    // Build snippet for full sentence
-    const snippet = buildTextSnippet(text, events, this.config);
-    console.log(`[Vocal] Built sentence snippet: maxTime=${snippet.maxTime.toFixed(3)}s, curves=${Object.keys(snippet.curves).length}`);
-
-    // Schedule the snippet
-    const name = this.scheduleSnippet(snippet, events);
-    if (!name) return null;
-
-    // Build word timings for sync
-    const wordTimings = this.buildWordTimings(text, this.config.speechRate ?? 1.0);
-
-    // Track sentence context
-    this.currentSentence = {
-      name,
+    return this.startTimeline({
+      name: this.buildTextSnippetName(text),
       text,
-      startTime: performance.now(),
-      maxTime: snippet.maxTime,
-      wordIndex: 0,
-      wordTimings,
-    };
-
-    return name;
+      visemes: events,
+      wordTimings: this.buildWordTimings(text, speechRate),
+      source: 'text',
+    });
   }
 
   /**
@@ -152,6 +182,16 @@ export class VocalService {
 
     ctx.wordIndex = expectedIndex + 1;
     this.store.setCurrentWord(word);
+  }
+
+  /**
+   * Update word timings for the active timeline when timing metadata arrives
+   * after the viseme timeline has already started.
+   */
+  updateWordTimings(wordTimings: VocalWordTiming[]): void {
+    if (!this.currentSentence) return;
+    this.currentSentence.wordTimings = this.normalizeWordTimings(wordTimings);
+    this.currentSentence.wordIndex = 0;
   }
 
   /**
@@ -247,30 +287,11 @@ export class VocalService {
    * @returns The snippet name
    */
   processVisemeEvents(events: VisemeEvent[], name?: string): string | null {
-    if (events.length === 0) return null;
-
-    // Stop any current sentence first
-    if (this.currentSentence) {
-      this.stopSentence();
-    }
-
-    // External viseme timings already include speech rate; keep playback rate at 1.0.
-    const snippet = buildVocalSnippet(events, { ...this.config, speechRate: 1.0 }, name);
-    const scheduledName = this.scheduleSnippet(snippet, events);
-
-    if (scheduledName) {
-      // Track as sentence context
-      this.currentSentence = {
-        name: scheduledName,
-        text: name || 'viseme_events',
-        startTime: performance.now(),
-        maxTime: snippet.maxTime,
-        wordIndex: 0,
-        wordTimings: [],
-      };
-    }
-
-    return scheduledName;
+    return this.startTimeline({
+      name,
+      visemes: events,
+      source: 'azure',
+    });
   }
 
   /**
@@ -313,9 +334,9 @@ export class VocalService {
   private buildWordTimings(
     text: string,
     speechRate: number
-  ): Array<{ word: string; startSec: number; endSec: number }> {
+  ): VocalWordTiming[] {
     const words = text.split(/\s+/).filter(w => w.length > 0);
-    const timings: Array<{ word: string; startSec: number; endSec: number }> = [];
+    const timings: VocalWordTiming[] = [];
 
     let currentTime = 0;
     for (const word of words) {
@@ -334,6 +355,41 @@ export class VocalService {
     }
 
     return timings;
+  }
+
+  private normalizeWordTimings(wordTimings?: VocalWordTiming[]): VocalWordTiming[] {
+    if (!wordTimings) return [];
+
+    return wordTimings
+      .filter((timing) =>
+        timing.word.length > 0 &&
+        Number.isFinite(timing.startSec) &&
+        Number.isFinite(timing.endSec)
+      )
+      .map((timing) => ({
+        word: timing.word,
+        startSec: Math.max(0, timing.startSec),
+        endSec: Math.max(Math.max(0, timing.startSec), timing.endSec),
+      }));
+  }
+
+  private buildTimelineName(timeline: VocalTimeline): string {
+    if (timeline.text?.trim()) {
+      return this.buildTextSnippetName(timeline.text);
+    }
+
+    const source = timeline.source ?? 'external';
+    return `vocal_${source}_${Date.now()}`;
+  }
+
+  private buildTextSnippetName(text: string): string {
+    const words = text
+      .split(/\s+/)
+      .slice(0, 3)
+      .join('_')
+      .toLowerCase()
+      .replace(/[^a-z_]/g, '');
+    return `vocal_${words || 'text'}_${Date.now()}`;
   }
 
   private scheduleSnippet(snippet: VocalSnippet, events: VisemeEvent[]): string | null {

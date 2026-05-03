@@ -3,7 +3,6 @@
  * Coordinates eye and head movements that follow mouth animations
  * Uses the animation scheduler to drive both eyes and head with a shared controller.
  */
-
 import type {
   EyeHeadTrackingConfig,
   EyeHeadTrackingState,
@@ -14,6 +13,11 @@ import type {
 import { DEFAULT_EYE_HEAD_CONFIG } from './types';
 import { EyeHeadTrackingScheduler, type EyeHeadHostCaps } from './eyeHeadTrackingScheduler';
 import { NullGazeAgency, type GazeAgency, GazeService } from '../gaze';
+import {
+  CameraRelativeGazeTracker,
+  computeCharacterRelativePointerTarget,
+  type CameraRelativeGazeController,
+} from '../camera/cameraRelativeGaze';
 import { createActor } from 'xstate';
 import {
   eyeHeadTrackingMachine,
@@ -21,7 +25,7 @@ import {
   type EyeHeadTrackingMachineContext,
 } from './eyeHeadTrackingMachine';
 import { fromEvent, type Subscription, animationFrameScheduler } from 'rxjs';
-import { map, pairwise, throttleTime } from 'rxjs/operators';
+import { filter, map, pairwise, throttleTime } from 'rxjs/operators';
 import { EyeHeadPlanner } from './planner';
 
 // Declare global BlazeFace from CDN
@@ -64,6 +68,8 @@ export class EyeHeadTrackingService {
   private lastWebcamUpdate: number = 0;
   private lastAgencySchedule: number = 0;
   private lastAgencyTarget: GazeTarget = { x: 0, y: 0, z: 0 };
+  private isStarted = false;
+  private cameraRelativeGazeTracker: CameraRelativeGazeTracker | null = null;
 
   constructor(
     config: EyeHeadTrackingConfig = {},
@@ -95,6 +101,7 @@ export class EyeHeadTrackingService {
     this.initializeScheduler();
     this.applyMixWeightSettings();
     this.initializeMachine();
+    this.syncCameraTracking();
   }
 
   private initializeMachine(): void {
@@ -217,6 +224,9 @@ export class EyeHeadTrackingService {
    * Start eye and head tracking
    */
   public start(): void {
+    this.isStarted = true;
+    this.cameraRelativeGazeTracker?.setEnabled(this.isCameraTrackingActive());
+
     if (this.config.eyeTrackingEnabled) {
       this.state.eyeStatus = 'tracking';
       this.callbacks.onEyeStart?.();
@@ -237,6 +247,8 @@ export class EyeHeadTrackingService {
    * Stop eye and head tracking
    */
   public stop(): void {
+    this.isStarted = false;
+    this.cameraRelativeGazeTracker?.setEnabled(false);
     this.clearTimers();
     if (this.scheduler?.pause) {
       this.scheduler.pause();
@@ -369,6 +381,7 @@ export class EyeHeadTrackingService {
    * Update configuration
    */
   public updateConfig(config: Partial<EyeHeadTrackingConfig>): void {
+    const previousCameraController = this.config.cameraController;
     this.config = {
       ...this.config,
       ...config,
@@ -399,6 +412,18 @@ export class EyeHeadTrackingService {
       config.engine !== undefined
     ) {
       this.applyMixWeightSettings();
+    }
+
+    if (config.cameraController !== undefined && config.cameraController !== previousCameraController) {
+      this.syncCameraTracking();
+    }
+
+    if (
+      config.cameraController !== undefined ||
+      config.eyeTrackingEnabled !== undefined ||
+      config.headTrackingEnabled !== undefined
+    ) {
+      this.cameraRelativeGazeTracker?.setEnabled(this.isCameraTrackingActive());
     }
 
     // Update experimental gaze config
@@ -466,6 +491,7 @@ export class EyeHeadTrackingService {
 
     this.trackingMode = mode;
     this.machine?.send({ type: 'SET_MODE', mode });
+    this.experimentalGaze?.setMode(mode);
 
     // Setup new mode
     if (mode === 'mouse') {
@@ -494,19 +520,13 @@ export class EyeHeadTrackingService {
     const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const toNormalized = (e: MouseEvent) => ({
       t: now(),
-      // Mouse position normalized to -1..+1 with sign flip for gaze direction:
-      //   Raw: +1 = right edge, -1 = left edge
-      //   After flip: +1 = left edge, -1 = right edge
-      // This maps to transitionContinuum(61, 62, value):
-      //   positive → AU62 → character looks toward viewer's LEFT (where mouse IS)
-      //   negative → AU61 → character looks toward viewer's RIGHT (where mouse IS)
-      x: -((e.clientX / window.innerWidth) * 2 - 1),
-      y: -((e.clientY / window.innerHeight) * 2 - 1),
+      ...computeCharacterRelativePointerTarget(this.getCameraController(), e),
     });
 
     this.mouseSubscription = fromEvent<MouseEvent>(window, 'mousemove')
       .pipe(
         throttleTime(0, animationFrameScheduler),
+        filter(() => this.isTrackingEnabled()),
         map(toNormalized),
         pairwise()
       )
@@ -727,14 +747,69 @@ export class EyeHeadTrackingService {
     this.stopWebcamTracking();
   }
 
+  private isCameraTrackingActive(): boolean {
+    return this.isStarted && this.isTrackingEnabled();
+  }
+
+  private isTrackingEnabled(): boolean {
+    return Boolean(this.config.eyeTrackingEnabled || this.config.headTrackingEnabled);
+  }
+
+  private getCameraController(): CameraRelativeGazeController | null {
+    return (this.config.cameraController as CameraRelativeGazeController | undefined) ?? null;
+  }
+
+  private getCameraRelativeOffset(): { x: number; y: number } {
+    return this.cameraRelativeGazeTracker?.getOffset() ?? { x: 0, y: 0 };
+  }
+
+  private applyCameraRelativeOffsetForCurrentTarget(): void {
+    if (!this.isStarted || !this.isTrackingEnabled()) {
+      return;
+    }
+
+    this.applyGazeToCharacter(this.state.targetGaze, {
+      applyEyes: this.config.eyeTrackingEnabled,
+      applyHead: this.config.headTrackingEnabled,
+      skipMachine: this.trackingMode !== 'manual',
+    });
+  }
+
+  private teardownCameraTracking(): void {
+    this.cameraRelativeGazeTracker?.dispose();
+    this.cameraRelativeGazeTracker = null;
+  }
+
+  private syncCameraTracking(): void {
+    const controller = this.getCameraController();
+
+    this.teardownCameraTracking();
+
+    if (!controller) {
+      return;
+    }
+
+    this.cameraRelativeGazeTracker = new CameraRelativeGazeTracker(controller, {
+      enabled: false,
+      onChange: () => {
+        if (!this.isStarted || !this.isTrackingEnabled()) {
+          return;
+        }
+
+        this.applyCameraRelativeOffsetForCurrentTarget();
+      },
+    });
+    this.cameraRelativeGazeTracker.setEnabled(this.isCameraTrackingActive());
+  }
+
   /**
    * Apply gaze to character using smooth transitions
    * Converts normalized gaze coordinates to AU values
    * Always uses transitions for smooth, natural movement
    * Duration scales with distance traveled for natural motion
    *
-   * Camera offset is applied to make the character look at the camera position,
-   * then the target gaze is added on top for perspective-correct eye contact.
+   * Camera-relative offset is cached from camera movement so gaze updates can
+   * reuse the last front-to-camera angle without recomputing it continuously.
    */
   private applyGazeToCharacter(
     target: GazeTarget,
@@ -749,24 +824,44 @@ export class EyeHeadTrackingService {
     const eyeIntensity = this.config.eyeIntensity ?? 1.0;
     const headIntensity = this.config.headIntensity ?? 0.5;
 
-    const cameraOffset = this.config.engine?.getCameraOffset?.() ?? { x: 0, y: 0 };
-
-    // Apply camera offset to target coordinates
-    // For webcam mode, this creates realistic eye contact
-    // For mouse/manual modes, this adds subtle perspective correction
+    const cameraOffset = this.getCameraRelativeOffset();
     const adjustedX = x + cameraOffset.x;
     const adjustedY = y + cameraOffset.y;
+    const adjustedTarget = { x: adjustedX, y: adjustedY, z: 0 };
+    const applyEyes = options?.applyEyes ?? true;
+    const applyHead = options?.applyHead ?? true;
 
     // Smooth target to prevent micro-jumps (especially near center crossing)
     const gazeMode = this.config.gazeMode ?? DEFAULT_EYE_HEAD_CONFIG.gazeMode;
-    const useAgency = gazeMode === 'legacy'
+    if (gazeMode === 'experimental' && this.experimentalGaze) {
+      this.experimentalGaze.setTarget(adjustedTarget);
+
+      if (applyEyes && this.config.eyeTrackingEnabled) {
+        this.state.eyeIntensity = eyeIntensity;
+      }
+      if (applyHead && this.config.headTrackingEnabled) {
+        this.state.headIntensity = headIntensity;
+      }
+
+      this.filteredGaze = adjustedTarget;
+      this.state.currentGaze = adjustedTarget;
+
+      if (!options?.skipMachine) {
+        this.machine?.send({
+          type: 'SET_STATUS',
+          lastApplied: this.state.currentGaze,
+        });
+      }
+      return;
+    }
+
+    const useAgency = gazeMode === 'legacy' || gazeMode === 'experimental'
       ? true
-      : gazeMode === 'experimental'
-        ? true
-        : (this.config.useAnimationAgency ?? DEFAULT_EYE_HEAD_CONFIG.useAnimationAgency);
+      : (this.config.useAnimationAgency ?? DEFAULT_EYE_HEAD_CONFIG.useAnimationAgency);
     const rawTarget = { x: adjustedX, y: adjustedY, z: 0 };
-    const useExperimentalScheduler = gazeMode === 'experimental';
-    const shouldPreSmooth = !useExperimentalScheduler;
+    // Fallback: only use raw target path when experimental mode is selected but
+    // experimental gaze runtime is unavailable for any reason.
+    const useExperimentalSchedulerFallback = gazeMode === 'experimental' && !this.experimentalGaze;
     const prev =
       useAgency && this.trackingMode !== 'manual'
         ? this.state.currentGaze
@@ -777,7 +872,7 @@ export class EyeHeadTrackingService {
     const smoothX = prev.x + (adjustedX - prev.x) * alpha;
     const smoothY = prev.y + (adjustedY - prev.y) * alpha;
     const smoothedTarget = { x: smoothX, y: smoothY, z: 0 };
-    const targetForPlanning = shouldPreSmooth ? smoothedTarget : rawTarget;
+    const targetForPlanning = useExperimentalSchedulerFallback ? rawTarget : smoothedTarget;
 
     // Calculate distance from current position (using smoothed coordinates)
     const { x: currentX, y: currentY } = this.state.currentGaze;
@@ -814,8 +909,6 @@ export class EyeHeadTrackingService {
     const eyeDuration = plan.eyeDuration;
     const headDuration = plan.headDuration;
 
-    const applyEyes = options?.applyEyes ?? true;
-    const applyHead = options?.applyHead ?? true;
     const scheduler = this.scheduler;
 
     // Use animation agency if enabled AND available, otherwise use direct engine calls
@@ -1034,6 +1127,7 @@ export class EyeHeadTrackingService {
     this.stop();
     this.clearTimers();
     this.cleanupMode();
+    this.teardownCameraTracking();
 
     this.eyeSnippets.clear();
     this.headSnippets.clear();

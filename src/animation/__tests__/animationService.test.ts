@@ -2,6 +2,27 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { animationEventEmitter, createAnimationService, snippetState$, snippetTime$ } from '../animationService';
 import type { Engine } from '../types';
 
+function sampleCurve(
+  curve: Array<{ time: number; intensity: number }> | undefined,
+  time: number,
+): number {
+  if (!curve || curve.length === 0) return 0;
+  if (time <= curve[0].time) return curve[0].intensity;
+  if (time >= curve[curve.length - 1].time) return curve[curve.length - 1].intensity;
+
+  for (let i = 0; i < curve.length - 1; i++) {
+    const a = curve[i];
+    const b = curve[i + 1];
+    if (time >= a.time && time <= b.time) {
+      const span = Math.max(1e-6, b.time - a.time);
+      const progress = (time - a.time) / span;
+      return a.intensity + (b.intensity - a.intensity) * progress;
+    }
+  }
+
+  return 0;
+}
+
 describe('AnimationService', () => {
   let service: ReturnType<typeof createAnimationService>;
   let mockHost: Partial<Engine>;
@@ -617,6 +638,70 @@ describe('AnimationService', () => {
       });
       expect(builtClips[0].handle.play).toHaveBeenCalled();
       expect(mockHost.onSnippetEnd as any).toHaveBeenCalledWith('test_playback');
+    });
+
+    it('preserves explicit viseme jaw overrides when building clips', async () => {
+      service.loadFromJSON({
+        name: 'manual_jaw_override',
+        snippetCategory: 'visemeSnippet',
+        autoVisemeJaw: false,
+        curves: {
+          '1': [{ time: 0, intensity: 0 }, { time: 0.1, intensity: 0.5 }],
+        },
+      });
+      service.play();
+
+      await vi.runAllTimersAsync();
+
+      expect(builtClips[0].options).toMatchObject({
+        snippetCategory: 'visemeSnippet',
+        autoVisemeJaw: false,
+      });
+    });
+
+    it('merges duplicate runtime viseme morph bindings before Loom3 clip creation', async () => {
+      (mockHost as any).getProfile = vi.fn(() => ({
+        visemeKeys: [
+          'V_Wide',
+          'V_Lip_Open',
+          'V_Explosive',
+          'V_Affricate',
+          'V_Wide',
+        ],
+      }));
+
+      service.loadFromJSON({
+        name: 'duplicate_viseme_morphs',
+        snippetCategory: 'visemeSnippet',
+        curves: {
+          '0': [
+            { time: 0, intensity: 0 },
+            { time: 0.05, intensity: 0.8 },
+            { time: 0.1, intensity: 0 },
+          ],
+          '4': [
+            { time: 0.08, intensity: 0 },
+            { time: 0.13, intensity: 0.6 },
+            { time: 0.18, intensity: 0 },
+          ],
+          '2': [
+            { time: 0, intensity: 0 },
+            { time: 0.06, intensity: 1 },
+          ],
+        },
+      });
+      service.play();
+
+      await vi.runAllTimersAsync();
+
+      expect(builtClips).toHaveLength(1);
+      expect(builtClips[0].curves['4']).toBeUndefined();
+      expect(sampleCurve(builtClips[0].curves['0'], 0.05)).toBeCloseTo(0.8, 3);
+      expect(sampleCurve(builtClips[0].curves['0'], 0.13)).toBeCloseTo(0.6, 3);
+      expect(builtClips[0].curves['2']).toBeDefined();
+      expect(builtClips[0].options).toMatchObject({
+        snippetCategory: 'visemeSnippet',
+      });
     });
 
     it('emits time stream anchors from seek and clip events', async () => {

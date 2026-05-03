@@ -1,46 +1,12 @@
 /**
  * VisemeMapper
  * Maps phonemes to the canonical 15-slot viseme order used by loom3.
- *
- * Canonical VISEME_KEYS (indices 0-14):
- * 0: EE, 1: Ah, 2: Oh, 3: OO, 4: I, 5: U, 6: W, 7: L,
- * 8: F_V, 9: Th, 10: S_Z, 11: B_M_P, 12: K_G_H_NG, 13: AE, 14: R
+ * Numeric indices are resolved from @lovelace_lol/loom3 VISEME_KEYS at runtime.
  */
 
 import type { VisemeID, PhonemeMapping } from './types';
-
-/**
- * Phoneme to canonical viseme index mapping table
- * Maps directly to viseme slot indices (0-14)
- */
-/**
- * Jaw opening amount per canonical viseme slot (0-1 scale)
- * Based on linguistic analysis of mouth aperture for each viseme shape:
- * - Open vowels (Ah, AE): High jaw opening (0.7-0.8)
- * - Round vowels (Oh, OO): Medium-high (0.5-0.6)
- * - Close vowels (EE, I): Low (0.2)
- * - Bilabials (B_M_P): Closed (0.0)
- * - Fricatives (F_V, S_Z): Minimal (0.1)
- *
- * Canonical indices: 0:EE, 1:Ah, 2:Oh, 3:OO, 4:I, 5:U, 6:W, 7:L, 8:F_V, 9:Th, 10:S_Z, 11:B_M_P, 12:K_G_H_NG, 13:AE, 14:R
- */
-const VISEME_JAW_AMOUNTS: Record<number, number> = {
-  0: 0.2,   // EE - slight opening, lips spread
-  1: 0.8,   // Ah - wide open (largest aperture)
-  2: 0.6,   // Oh - medium-high, rounded
-  3: 0.5,   // OO - medium, protruded lips
-  4: 0.2,   // I - slight opening
-  5: 0.5,   // U - medium, rounded
-  6: 0.4,   // W - medium, protruded lips
-  7: 0.3,   // L - tongue tip, moderate
-  8: 0.1,   // F_V - teeth on lip, minimal jaw
-  9: 0.15,  // Th - tongue between teeth
-  10: 0.1,  // S_Z - teeth close, slight gap
-  11: 0.0,  // B_M_P - lips sealed, jaw closed
-  12: 0.35, // K_G_H_NG - back of tongue, moderate
-  13: 0.75, // AE - open front vowel (cat, bat)
-  14: 0.35, // R - retroflex, moderate opening
-};
+import { VISEME_JAW_AMOUNTS } from '@lovelace_lol/loom3';
+import { CANONICAL_VISEMES } from './canonicalVisemes';
 
 /**
  * Get the jaw opening amount for a given viseme
@@ -51,72 +17,71 @@ export function getJawAmountForViseme(visemeId: number): number {
 }
 
 /**
- * Phoneme to canonical viseme index mapping table
- * Canonical indices: 0:EE, 1:Ah, 2:Oh, 3:OO, 4:I, 5:U, 6:W, 7:L, 8:F_V, 9:Th, 10:S_Z, 11:B_M_P, 12:K_G_H_NG, 13:AE, 14:R
+ * Phoneme to canonical viseme index mapping table.
  */
 const PHONEME_TO_VISEME_MAP: Record<string, VisemeID> = {
   // Silence - maps to B_M_P (closed mouth)
-  'sil': 11,
-  'pau': 11,
-  'PAUSE': 11,
+  'sil': CANONICAL_VISEMES.B_M_P,
+  'pau': CANONICAL_VISEMES.B_M_P,
+  'PAUSE': CANONICAL_VISEMES.B_M_P,
 
   // DoubleMetaphone single-letter vowels (canonical viseme indices)
-  'A': 1,       // → Ah (index 1)
-  'E': 0,       // → EE (index 0)
-  'I': 4,       // → I (index 4)
-  'O': 2,       // → Oh (index 2)
-  'U': 5,       // → U (index 5)
+  'A': CANONICAL_VISEMES.Ah,
+  'E': CANONICAL_VISEMES.EE,
+  'I': CANONICAL_VISEMES.Ih,
+  'O': CANONICAL_VISEMES.Oh,
+  'U': CANONICAL_VISEMES.W_OO,
 
   // DoubleMetaphone special characters
-  '0': 9,       // → Th (index 9)
-  'X': 10,      // → S_Z (index 10, for SH-like sounds)
-  'J': 12,      // → K_G_H_NG (index 12, for J sound)
+  '0': CANONICAL_VISEMES.Th,
+  'X': CANONICAL_VISEMES.S_Z,
+  'J': CANONICAL_VISEMES.Ch_J,
 
   // ARPABET vowels (canonical viseme indices)
-  'AE': 13,     // → AE (index 13)
-  'AX': 1,      // → Ah (index 1)
-  'AH': 1,      // → Ah (index 1)
-  'AA': 1,      // → Ah (index 1)
-  'AO': 2,      // → Oh (index 2)
-  'EY': 0,      // → EE (index 0)
-  'EH': 0,      // → EE (index 0)
-  'UH': 3,      // → OO (index 3)
-  'ER': 14,     // → R (index 14)
-  'Y': 4,       // → I (index 4)
-  'IY': 4,      // → I (index 4)
-  'IH': 4,      // → I (index 4)
-  'IX': 4,      // → I (index 4)
-  'W': 6,       // → W (index 6)
-  'UW': 3,      // → OO (index 3)
-  'OW': 2,      // → Oh (index 2)
-  'AW': 1,      // → Ah (index 1)
-  'OY': 2,      // → Oh (index 2)
-  'AY': 1,      // → Ah (index 1)
+  'AE': CANONICAL_VISEMES.AE,
+  'AX': CANONICAL_VISEMES.Ah,
+  'AH': CANONICAL_VISEMES.Ah,
+  'AA': CANONICAL_VISEMES.Ah,
+  'AO': CANONICAL_VISEMES.Oh,
+  'EY': CANONICAL_VISEMES.EE,
+  'EH': CANONICAL_VISEMES.EE,
+  'UH': CANONICAL_VISEMES.W_OO,
+  'ER': CANONICAL_VISEMES.Er,
+  'Y': CANONICAL_VISEMES.Ih,
+  'IY': CANONICAL_VISEMES.EE,
+  'IH': CANONICAL_VISEMES.Ih,
+  'IX': CANONICAL_VISEMES.Ih,
+  'W': CANONICAL_VISEMES.W_OO,
+  'UW': CANONICAL_VISEMES.W_OO,
+  'OW': CANONICAL_VISEMES.Oh,
+  'AW': CANONICAL_VISEMES.Ah,
+  'OY': CANONICAL_VISEMES.Oh,
+  'AY': CANONICAL_VISEMES.Ah,
 
   // Consonants (canonical viseme indices)
-  'H': 1,       // → Ah (index 1, open glottal)
-  'HH': 1,      // → Ah (index 1)
-  'R': 14,      // → R (index 14)
-  'L': 7,       // → L (index 7)
-  'S': 10,      // → S_Z (index 10)
-  'Z': 10,      // → S_Z (index 10)
-  'SH': 10,     // → S_Z (index 10)
-  'CH': 10,     // → S_Z (index 10)
-  'JH': 10,     // → S_Z (index 10)
-  'ZH': 10,     // → S_Z (index 10)
-  'TH': 9,      // → Th (index 9)
-  'DH': 9,      // → Th (index 9)
-  'F': 8,       // → F_V (index 8)
-  'V': 8,       // → F_V (index 8)
-  'D': 7,       // → L (index 7, tongue tip)
-  'T': 7,       // → L (index 7, tongue tip)
-  'N': 7,       // → L (index 7, tongue tip)
-  'K': 12,      // → K_G_H_NG (index 12)
-  'G': 12,      // → K_G_H_NG (index 12)
-  'NG': 12,     // → K_G_H_NG (index 12)
-  'P': 11,      // → B_M_P (index 11)
-  'B': 11,      // → B_M_P (index 11)
-  'M': 11,      // → B_M_P (index 11)
+  'H': CANONICAL_VISEMES.Ah,
+  'HH': CANONICAL_VISEMES.Ah,
+  'R': CANONICAL_VISEMES.R,
+  'L': CANONICAL_VISEMES.T_L_D_N,
+  'S': CANONICAL_VISEMES.S_Z,
+  'Z': CANONICAL_VISEMES.S_Z,
+  'SH': CANONICAL_VISEMES.S_Z,
+  'CH': CANONICAL_VISEMES.Ch_J,
+  'JH': CANONICAL_VISEMES.Ch_J,
+  'ZH': CANONICAL_VISEMES.S_Z,
+  'TH': CANONICAL_VISEMES.Th,
+  'DH': CANONICAL_VISEMES.Th,
+  'F': CANONICAL_VISEMES.F_V,
+  'V': CANONICAL_VISEMES.F_V,
+  'D': CANONICAL_VISEMES.T_L_D_N,
+  'T': CANONICAL_VISEMES.T_L_D_N,
+  'N': CANONICAL_VISEMES.T_L_D_N,
+  'K': CANONICAL_VISEMES.K_G_H_NG,
+  'G': CANONICAL_VISEMES.K_G_H_NG,
+  'NG': CANONICAL_VISEMES.K_G_H_NG,
+  'P': CANONICAL_VISEMES.B_M_P,
+  'B': CANONICAL_VISEMES.B_M_P,
+  'M': CANONICAL_VISEMES.B_M_P,
 };
 
 /**
@@ -222,7 +187,7 @@ export class VisemeMapper {
       const duration = PAUSE_DURATIONS[phoneme] || 300;
       return {
         phoneme,
-        viseme: 11, // B_M_P (closed mouth)
+        viseme: CANONICAL_VISEMES.B_M_P,
         duration,
       };
     }
@@ -230,7 +195,7 @@ export class VisemeMapper {
     // Normalize phoneme (uppercase, remove stress markers)
     const normalizedPhoneme = phoneme.toUpperCase().replace(/[0-9]/g, '');
 
-    const visemeId = PHONEME_TO_VISEME_MAP[normalizedPhoneme] ?? 11; // Default to B_M_P (closed)
+    const visemeId = PHONEME_TO_VISEME_MAP[normalizedPhoneme] ?? CANONICAL_VISEMES.B_M_P;
 
     // Use phoneme-specific duration if available, otherwise fall back to vowel/consonant defaults
     let baseDuration = PHONEME_DURATIONS[normalizedPhoneme];

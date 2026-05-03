@@ -12,6 +12,7 @@ Text-to-Speech service for Latticework with lip-sync support.
 - **Voice Management**: Dynamic voice discovery and selection
 - **Rate/Pitch/Volume Control**: Full speech parameter control
 - **Emoji Support**: Automatic emoji detection and timeline integration
+- **Experimental Playback Reference**: Optional current-tab/display audio capture for Web Speech interruption testing
 
 ## Installation
 
@@ -78,6 +79,7 @@ Creates a new TTS service instance.
   - `pitch?: number` - Speech pitch, 0.0-2.0 (default: `1.0`)
   - `volume?: number` - Speech volume, 0.0-1.0 (default: `1.0`)
   - `voiceName?: string` - Voice name to use
+  - `webSpeechReferenceMode?: 'none' | 'displayMedia'` - experimental browser-mediated tab/display audio reference for Web Speech TTS
 
 - `callbacks` - Event callbacks
   - `onStart?: () => void` - Called when speech starts
@@ -87,6 +89,7 @@ Creates a new TTS service instance.
   - `onError?: (error: Error) => void` - Error handler
   - `onPause?: () => void` - Pause handler
   - `onResume?: () => void` - Resume handler
+  - `onPlaybackReferenceStatusChange?: (status) => void` - called when the experimental playback reference changes state
 
 ### `TTSService` Methods
 
@@ -147,6 +150,27 @@ Get current TTS state.
 const state = tts.getState();
 // { status: 'speaking', currentText: 'Hello', ... }
 ```
+
+#### `preparePlaybackReference(): Promise<PlaybackReferenceStatus>`
+
+Prepare the optional playback-reference stream used by audio-based interruption detection. For Web Speech, browsers do not expose a native `speechSynthesis` audio stream, so `webSpeechReferenceMode: 'displayMedia'` uses `getDisplayMedia()` as an experimental workaround.
+
+This method can show a browser display/tab-sharing prompt and must be called from an explicit user gesture. Choose the current tab and enable audio sharing. If capture is denied, unavailable, or provides no audio track, speech still works but audio-based interruption detection stays disabled unless transcription is explicitly configured to allow threshold-only interruption.
+
+```typescript
+const status = await tts.preparePlaybackReference();
+if (status === 'available') {
+  console.log('Using current-tab audio as playback reference');
+}
+```
+
+#### `getPlaybackReferenceTrack(): MediaStreamTrack | null`
+
+Returns the current playback-reference audio track when available. Azure/SAPI playback can expose a direct Web Audio reference; Web Speech can only expose the experimental display/tab capture reference after `preparePlaybackReference()` succeeds.
+
+#### `onPlaybackReferenceTrackChange(listener): () => void`
+
+Subscribe to playback-reference track changes so the transcription agency can update or clear its echo/interruption analyser when the reference starts or ends.
 
 #### `updateConfig(config: Partial<TTSConfig>): void`
 
@@ -257,6 +281,7 @@ Each event fires at its exact offset time, enabling perfect synchronization betw
 ### Web Speech API (Default)
 - **Pros**: Native browser support, no server required, low latency
 - **Cons**: Phoneme extraction is approximate, voice quality varies
+- **Interruption note**: Web Speech does not expose its synthesized audio stream. The optional `displayMedia` reference mode is only a browser permission workaround that captures tab/display audio, not a clean TTS-only stream.
 
 ### SAPI (Server-based)
 - **Pros**: Pre-computed viseme data, consistent quality, more voices

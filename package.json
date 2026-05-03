@@ -22,7 +22,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/copy-snippets.mjs",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -32,7 +32,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@lovelace_lol/loom3": "^1.0.30",
+    "@lovelace_lol/loom3": "^1.0.38",
     "effect": "^3.19.14",
     "most-subject": "^6.0.0",
     "rxjs": "^7.8.2",
