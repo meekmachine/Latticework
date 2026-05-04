@@ -1,108 +1,249 @@
 # Latticework
 
-`@lovelace_lol/latticework` is the standalone Latticework runtime package extracted from `LoomLarge/frontend/src/latticework`.
+`@lovelace_lol/latticework` is the standalone character-runtime package used by
+LoomLarge for speech, conversation, gaze, blinking, hair, lip-sync, and animation
+coordination.
 
-This repo is the package home for the current runtime code. The embedded LoomLarge copy can stay in place while the external package, publish flow, and linked-PR integration are wired up.
-
-## Intended Architecture
-
-- `Effect` for state, lifecycle, orchestration, and service composition
-- `Most.js` for transport/event streams and observable-style flows
-- stable package contracts that let LoomLarge adopt the external package before the internals are fully rebuilt
-
-## Vision
-
-The long-term goal is not a single animation manager. Latticework should become a library of collaborating agencies that each own a narrow part of character behavior and coordinate through clear runtime contracts.
-
-This direction follows the architecture already documented in LoomLarge:
-
-- a shared animation/runtime layer acts as the execution surface for all animation snippets
-- domain agencies own their own state, lifecycle, scheduling rules, and cleanup behavior
-- higher-level coordinators delegate work to specialized agencies instead of embedding all behavior in one service
-- multiple agencies can contribute at the same time, with the runtime resolving timing, priority, continuity, and blending
-
-The target agency model includes systems such as:
-
-- animation/runtime for clip execution, arbitration, and continuity
-- TTS for speech generation and speech-timed coordination
-- vocal/lip-sync for visemes, jaw motion, and spoken phrase timing
-- prosodic for emphasis, phrasing, and speech-driven expression
-- blink for autonomous eye behavior
-- gaze / eye-head tracking for attention and target following
-- conversation / transcription for higher-level orchestration across interactive flows
-
-In the longer-term design, `Effect` should own service composition, resource management, state transitions, and cancellation. `Most.js` should carry transport concerns such as timed event streams, signal fan-out, and external observable-style inputs. The point is to make collaboration explicit: agencies should publish and consume well-defined streams and commands, while the runtime stays responsible for turning those decisions into coherent output.
-
-That means this package should eventually expose a set of composable agencies and runtime interfaces that LoomLarge can assemble, rather than another tightly-coupled application-specific stack.
-
-## Strategy
-
-The near-term strategy is to make the external package real and usable first. The current runtime can act as a migration bridge while LoomLarge starts depending on `@lovelace_lol/latticework` through a small adapter layer.
-
-The longer-term strategy is to replace the internals behind stable package contracts. New modules should be rebuilt around `Effect` services and `Most.js` streams, with the existing LoomLarge behavior used as reference material and parity fixtures.
-
-The important boundary is ownership. Agencies should decide what they want to express. The runtime should decide how simultaneous agency outputs become coherent animation.
-
-## Advantages
-
-- isolates the character-behavior runtime from LoomLarge application code
-- creates a package that can be tested, versioned, and released independently
-- makes agency ownership explicit, so lip-sync, gaze, blink, prosody, and TTS do not keep rewriting each other's state
-- gives LoomLarge a gradual adoption path through adapters instead of one high-risk replacement
-- makes timing bugs easier to reproduce because streams, agency decisions, and runtime output can be tested separately
-- lets the package boundary stabilize before the internal Effect and Most.js rewrite is complete
-
-## Challenges
-
-- the current LoomLarge implementation mixes old scheduler logic, XState, RxJS, and newer stream-based ideas, so the boundaries need to be rediscovered carefully
-- timing behavior is user-visible and fragile, especially for lip-sync, jaw motion, gaze, and speech-driven expression
-- a clean reimplementation can drift from working behavior unless we build parity fixtures and migration tests early
-- agencies can conflict unless priority, ownership, blending, and cancellation rules are part of the core runtime contract
-- package extraction adds release discipline, API stability, and migration overhead before it pays off
-- carrying the extracted runtime for too long would preserve the architectural problems this package is meant to fix
-
-## How We Make It Better
-
-- define runtime contracts before implementation: agency inputs, agency outputs, cancellation, priorities, and timing units
-- build golden fixtures from LoomLarge scenarios for TTS, lip-sync, gaze, blink, and prosody before replacing behavior
-- keep each agency independently testable with deterministic clocks and stream fixtures
-- expose a small adapter layer for LoomLarge so migration can happen one agency at a time
-- avoid copying more code from `frontend/src/latticework`; use the old implementation as behavioral reference for new modules
-- document every public API with ownership rules: who may emit, who may consume, and who resolves conflicts
-- make observability part of the package, including trace events for agency input, agency decisions, and runtime output
-- track which exported modules are bridge code and which modules have been rebuilt around the target architecture
+Latticework owns character-behavior agencies and runtime helpers. LoomLarge owns
+the application shell, UI, backend routes, character asset loading, and product
+flows that assemble those agencies.
 
 ## Current Status
 
-What exists today:
+Latticework has been externalized from LoomLarge and is published to npm.
 
-- extracted runtime source from LoomLarge
-- ESM + CJS build output via `tsup`
-- Vitest test harness
-- GitHub Actions PR checks
-- GitHub Actions NPM publish workflow
+- Package: `@lovelace_lol/latticework`
+- Repo: `meekmachine/Latticework`
+- Current LoomLarge consumption: `@lovelace_lol/latticework@^0.0.5`
+- LoomLarge no longer contains `frontend/src/latticework`
+- LoomLarge validates linked Latticework PRs before publish when needed
 
-What is still in transition:
+The current package is a bridge extraction that preserves the working runtime
+surface while the internals are cleaned up. The long-term architecture is still
+to move toward clearer `Effect` service composition and `Most.js` stream
+contracts without breaking LoomLarge consumers.
 
-- LoomLarge still keeps a copy of the runtime under `frontend/src/latticework`
-- package adoption inside LoomLarge is being wired separately so the in-repo copy can remain as fallback until the external package path is proven
-- API cleanup and dependency trimming can happen after the extracted package path is stable
-
-## Scripts
+## Install
 
 ```bash
-npm install
+npm install @lovelace_lol/latticework
+```
+
+`three` is an optional peer dependency. Install it in consumers that use runtime
+surfaces backed by Three.js or animation-engine integration.
+
+```bash
+npm install three
+```
+
+## Package Boundary
+
+Latticework should contain reusable character-runtime behavior:
+
+- animation services, snippet state, bundled snippet preloading, and baked clip
+  runtime helpers
+- TTS and transcription services
+- conversation orchestration for local browser speech flows
+- vocal/lip-sync timeline helpers, including Azure/SAPI viseme normalization
+- gaze and eye/head tracking services
+- blink, hair, and prosodic agencies
+- runtime configuration helpers that are not LoomLarge-specific UI state
+
+LoomLarge should keep app-specific behavior:
+
+- React screens, panels, and module UI
+- backend API calls and product-specific session orchestration
+- character profile selection and product settings
+- LiveKit room/token ownership and app-level connection UX
+- smoke tests and previews for the assembled LoomLarge experience
+
+## Public Runtime Areas
+
+The package currently exposes a single root entry point.
+
+```ts
+import {
+  createAnimationService,
+  createConversationService,
+  createTTSService,
+  createTranscriptionService,
+  createVocalService,
+  createEyeHeadTrackingService,
+  azureVisemesToTimeline,
+} from '@lovelace_lol/latticework';
+```
+
+| Area | Key exports | Purpose |
+| --- | --- | --- |
+| Animation | `createAnimationService`, snippet observables, snippet preload helpers | Schedules snippets, tracks playback state, exposes UI/runtime streams |
+| TTS | `createTTSService`, TTS timeline helpers, playback-reference types | Speaks text, emits timing events, coordinates vocal animation when an animation agency is provided |
+| Transcription | `createTranscriptionService` | Browser speech recognition, transcript callbacks, interruption/reference-audio hooks |
+| Conversation | `createConversationService`, `ConversationFlow` | Coordinates TTS, transcription, turn state, interruption handling, gaze/prosody handoff |
+| Vocal / lip-sync | `createVocalService`, `azureVisemesToTimeline`, `VisemeMapper`, `PhonemeExtractor` | Converts text/provider visemes into animation timelines and snippets |
+| Gaze / eye-head | `createEyeHeadTrackingService`, gaze config/types | Drives attention, gaze targets, listening/speaking poses, blink hooks |
+| Blink | `createBlinkService`, `BlinkService` | Autonomous and triggered blinking |
+| Hair | `HairService`, hair physics config/types | Hair runtime state and UI-facing configuration |
+| Prosody | source modules, not yet a stable root export | Speech-driven expression and gesture coordination |
+
+## Basic Usage
+
+### TTS
+
+```ts
+import { createTTSService } from '@lovelace_lol/latticework';
+
+const tts = createTTSService(
+  {
+    engine: 'webSpeech',
+    rate: 1,
+    pitch: 1,
+    volume: 1,
+  },
+  {
+    onStart: () => console.log('speaking'),
+    onEnd: () => console.log('done'),
+    onBoundary: ({ word }) => console.log('word', word),
+  }
+);
+
+await tts.speak('Hello from Latticework.');
+```
+
+### Conversation Service And ConversationFlow
+
+`ConversationService` owns the mechanics: TTS, transcription, state,
+interruptions, gaze/prosody coordination, and cleanup.
+
+`ConversationFlow` is the caller-provided content policy. It is a generator that
+yields agent utterances and receives final user transcripts through `.next()`.
+
+```ts
+import {
+  createConversationService,
+  createTranscriptionService,
+  createTTSService,
+  type ConversationFlow,
+} from '@lovelace_lol/latticework';
+
+const tts = createTTSService({ engine: 'webSpeech' });
+const transcription = createTranscriptionService({ lang: 'en-US' });
+const conversation = createConversationService(tts, transcription);
+
+function* simpleFlow(): ConversationFlow {
+  const answer = yield 'What should we work on today?';
+  yield `I heard: ${answer}`;
+}
+
+conversation.start(simpleFlow);
+```
+
+The generator API is intentionally documented because it is easy to confuse with
+the service itself. Follow-up API cleanup is tracked in issue #8.
+
+### Azure Visemes And Vocal Runtime
+
+```ts
+import {
+  azureVisemesToTimeline,
+  createVocalService,
+} from '@lovelace_lol/latticework';
+
+const vocal = createVocalService({
+  animationAgency: {
+    schedule: (snippet) => animationManager.schedule(snippet),
+    remove: (name) => animationManager.remove(name),
+    seek: (name, offsetSec) => animationManager.seek?.(name, offsetSec),
+  },
+});
+
+const visemes = azureVisemesToTimeline(
+  [{ viseme_id: 2, audio_offset: 0.12 }],
+  1200,
+  { visualLeadMs: 35 }
+);
+
+vocal.startTimeline({
+  source: 'azure',
+  text: 'hello',
+  visemes,
+  durationSec: 1.2,
+});
+```
+
+## Development
+
+```bash
+npm ci
 npm run build
 npm run typecheck
 npm test
 ```
 
-## Publish Flow
+The build emits ESM, CJS, and type declarations through `tsup`. The build also
+copies bundled animation snippets into `dist` so consumers can preload them from
+the package.
 
-The publish workflow mirrors Loom3:
+## Release Flow
 
-- PRs run build, typecheck, and tests
-- pushes to `main` bump the patch version automatically
-- the publish job verifies NPM auth and publishes when the version is new
+Publishing currently mirrors the Loom3-style tag/release flow.
 
-The workflow expects an `npm` GitHub environment with an `NPM_KEY` secret.
+1. Open a PR against `main`.
+2. PR checks run build, typecheck, and tests.
+3. Merge to `main`.
+4. The `Publish to NPM` workflow determines the next patch version, creates or
+   reuses a `vX.Y.Z` tag, builds, tests, and publishes if that npm version does
+   not already exist.
+5. Verify the published package.
+
+```bash
+npm view @lovelace_lol/latticework version gitHead --json
+```
+
+The workflow currently expects the GitHub `npm` environment to provide:
+
+- `NPM_KEY` for npm authentication
+- `PUBLISH_PUSH_TOKEN` for pushing release tags
+
+Moving to npm trusted publishing and rotating/removing the long-lived token is
+tracked in issue #7.
+
+## LoomLarge Linked-PR Workflow
+
+Use linked PR validation when LoomLarge needs to test unreleased Latticework
+changes before an npm publish.
+
+Typical sequence:
+
+1. Open a Latticework PR with the package change.
+2. In the LoomLarge PR body or comments, add a dependency link such as:
+
+   ```text
+   Depends-on: meekmachine/Latticework#123
+   ```
+
+3. LoomLarge CI resolves that Latticework PR to a git dependency for the current
+   validation run.
+4. After the Latticework PR merges and publishes, update the LoomLarge PR to use
+   the published npm semver.
+5. Do not merge LoomLarge `main` with a temporary git SHA dependency.
+
+Release and linked-PR documentation is tracked in issue #6.
+
+## Roadmap
+
+Near-term work:
+
+- document the release and linked-PR workflow in more detail (#6)
+- move publishing to npm trusted publishing and rotate token secrets (#7)
+- clarify or simplify `ConversationService` versus `ConversationFlow` (#8)
+- keep LoomLarge consumer smoke coverage current
+
+Longer-term work:
+
+- reduce bridge-era runtime coupling
+- make agency ownership and cancellation rules explicit
+- replace legacy runtime internals behind stable public contracts
+- move toward `Effect` for service composition and lifecycle management
+- use `Most.js` streams for timed events, fan-out, and observable-style inputs
+
+The package boundary should remain stable while internals improve.
