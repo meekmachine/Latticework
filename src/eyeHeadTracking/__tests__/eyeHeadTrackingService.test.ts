@@ -31,6 +31,7 @@ function createHarness(config: {
   eyeTrackingEnabled?: boolean;
   headTrackingEnabled?: boolean;
   gazeMode?: 'engine' | 'legacy' | 'experimental';
+  animationAgency?: any;
 } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1, 3);
@@ -52,6 +53,7 @@ function createHarness(config: {
       controls,
       getModel,
     },
+    animationAgency: config.animationAgency,
     eyeTrackingEnabled: config.eyeTrackingEnabled ?? true,
     headTrackingEnabled: config.headTrackingEnabled ?? true,
     headFollowEyes: true,
@@ -65,6 +67,21 @@ function createHarness(config: {
     engine,
     getModel,
     service,
+  };
+}
+
+function createAnimationAgency() {
+  return {
+    playing: false,
+    play: vi.fn(),
+    schedule: vi.fn((snippet: { name: string }) => snippet.name),
+    updateSnippet: vi.fn((snippet: { name: string }) => snippet.name),
+    seek: vi.fn(),
+    pauseSnippet: vi.fn(),
+    resumeSnippet: vi.fn(),
+    restartSnippet: vi.fn(),
+    remove: vi.fn(),
+    onSnippetEnd: vi.fn(),
   };
 }
 
@@ -149,6 +166,25 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
     );
 
     expect(eyeYawCall?.[2]).toBeGreaterThan(0.05);
+
+    harness.service.dispose();
+  });
+
+  it('uses the animation-agency runtime even when legacy mode flags request engine output', () => {
+    const animationAgency = createAnimationAgency();
+    const harness = createHarness({
+      gazeMode: 'engine',
+      animationAgency,
+    });
+
+    harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
+
+    expect(animationAgency.schedule).toHaveBeenCalled();
+    expect(harness.engine.transitionContinuum).not.toHaveBeenCalled();
+
+    const scheduledNames = animationAgency.schedule.mock.calls.map(([snippet]) => snippet.name);
+    expect(scheduledNames).toContain('eyeHeadTracking/eyeYaw');
+    expect(scheduledNames).toContain('eyeHeadTracking/headYaw');
 
     harness.service.dispose();
   });
