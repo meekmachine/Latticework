@@ -80,7 +80,7 @@ import {
 | Transcription | `createTranscriptionService` | Browser speech recognition, transcript callbacks, interruption/reference-audio hooks |
 | Conversation | `createConversationService`, `ConversationFlow` | Coordinates TTS, transcription, turn state, interruption handling, gaze/prosody handoff |
 | Vocal / lip-sync | `createVocalService`, `azureVisemesToTimeline`, `VisemeMapper`, `PhonemeExtractor` | Converts text/provider visemes into animation timelines and snippets |
-| Gaze / eye-head | `createEyeHeadTrackingService`, gaze config/types | Drives attention, gaze targets, listening/speaking poses, blink hooks |
+| Gaze / eye-head | `createEyeHeadTrackingService`, `GazeService`, gaze config/types | Drives attention through Most streams, Effect-managed state refs, animation-agency runtime output, and engine fallback |
 | Blink | `createBlinkService`, `BlinkService` | Autonomous and triggered blinking |
 | Hair | `HairService`, hair physics config/types | Hair runtime state and UI-facing configuration |
 | Prosody | source modules, not yet a stable root export | Speech-driven expression and gesture coordination |

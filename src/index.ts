@@ -76,6 +76,29 @@ export type {
   TrackingChannel,
 } from './eyeHeadTracking';
 
+export {
+  GazeService,
+  createEngineGazeRuntime,
+  planGazeTarget,
+  resolveGazeConfig,
+} from './gaze';
+export type {
+  GazeApplyOptions,
+  GazeClock,
+  GazeCommand,
+  GazeConfig,
+  GazeEngineRuntimeHost,
+  GazeEvent,
+  GazeMode,
+  GazePlan,
+  GazePlanInput,
+  GazeResolvedConfig,
+  GazeRuntime,
+  GazeRuntimeCommand,
+  GazeSetTargetResult,
+  GazeState,
+} from './gaze';
+
 export { HairService } from './hair/hairService';
 export {
   HAIR_COLOR_PRESETS,

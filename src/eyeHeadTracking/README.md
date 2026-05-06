@@ -165,6 +165,21 @@ The service maintains simple status flags instead of separate state machines:
 
 These flags are surfaced via `getState()` and useful for UI/debug overlays (e.g., highlighting when the head is intentionally lagging behind the eyes).
 
+## Gaze Runtime Architecture
+
+All eye/head targets route through `GazeService`. That service exposes Most streams
+for state/events and uses Effect refs for mutable runtime state. The eye/head
+service adapts browser inputs and camera-relative offsets into that modern gaze
+runtime.
+
+When an `animationAgency` is provided, gaze output is scheduled as animation
+snippets so it can mix with lipsync, blink, prosody, and other animation layers.
+When no animation agency is available, the same gaze runtime falls back to direct
+engine continuum/AU transitions.
+
+Older `gazeMode` and `useAnimationAgency` config fields are still accepted for
+compatibility, but they no longer select separate execution paths.
+
 ## Action Units (AUs)
 
 The agency controls the following ARKit blendshapes via AUs:
@@ -235,6 +250,9 @@ Creates and returns an `EyeHeadTrackingService` instance.
 **Config Options:**
 ```typescript
 interface EyeHeadTrackingConfig {
+  /** Deprecated compatibility flag; modern gaze is always used. */
+  gazeMode?: 'engine' | 'legacy' | 'experimental';
+
   // Eye tracking
   eyeTrackingEnabled?: boolean;
   eyeSaccadeSpeed?: number;        // 0.1-1.0
@@ -248,6 +266,11 @@ interface EyeHeadTrackingConfig {
   headFollowDelay?: number;        // milliseconds
   headSpeed?: number;              // 0.1-1.0
   headPriority?: number;
+
+  // Runtime output
+  engine?: any;                    // direct continuum/AU fallback
+  animationAgency?: any;           // preferred output path for animation mixing
+  useAnimationAgency?: boolean;    // deprecated compatibility field
 
   // Coordination
   mouthSyncEnabled?: boolean;
