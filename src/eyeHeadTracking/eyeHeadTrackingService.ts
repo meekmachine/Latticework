@@ -1,7 +1,7 @@
 /**
  * Eye and Head Tracking Service
  * Coordinates eye and head movements that follow mouth animations
- * Uses the animation scheduler to drive both eyes and head with a shared controller.
+ * Uses GazeService for shared eye/head state and direct engine output.
  */
 import type {
   EyeHeadTrackingConfig,
@@ -12,7 +12,7 @@ import type {
 } from './types';
 import { DEFAULT_EYE_HEAD_CONFIG } from './types';
 import { EyeHeadTrackingScheduler, type EyeHeadHostCaps } from './eyeHeadTrackingScheduler';
-import { GazeService, type GazeRuntime, type GazeRuntimeCommand } from '../gaze';
+import { GazeService } from '../gaze';
 import {
   CameraRelativeGazeTracker,
   computeCharacterRelativePointerTarget,
@@ -62,8 +62,6 @@ export class EyeHeadTrackingService {
   private webcamFaceDetected: boolean = false;
   private webcamListeners: Set<(detected: boolean, landmarks?: Array<{ x: number; y: number }>) => void> = new Set();
   private lastWebcamUpdate: number = 0;
-  private lastAgencySchedule: number = 0;
-  private lastAgencyTarget: GazeTarget = { x: 0, y: 0, z: 0 };
   private isStarted = false;
   private cameraRelativeGazeTracker: CameraRelativeGazeTracker | null = null;
 
@@ -169,8 +167,10 @@ export class EyeHeadTrackingService {
       headPriority: this.config.headPriority ?? DEFAULT_EYE_HEAD_CONFIG.headPriority,
     });
 
-    // The modern gaze service owns state/stream/runtime orchestration. The
-    // scheduler is only an output adapter when an animation agency is present.
+    // Match the production experimental path: GazeService owns state/streams,
+    // while output applies through the direct engine runtime for responsive
+    // cursor/webcam tracking. The animation scheduler remains available for
+    // other services, but real-time gaze must not be quantized through it.
     this.gazeService = this.createGazeService();
   }
 
@@ -182,66 +182,14 @@ export class EyeHeadTrackingService {
       eyeIntensity: this.config.eyeIntensity,
       headIntensity: this.config.headIntensity,
       minDelta: 0.003,
-      // Animation runtime crossfades already provide continuity for this agency.
+      // Production experimental behavior is direct and unsmoothed at this layer.
       smoothFactor: 1,
       engine: this.config.engine,
-      runtime: this.createGazeRuntime(),
       useTransport: false,
       clock: {
         now: () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()),
       },
     });
-  }
-
-  private createGazeRuntime(): GazeRuntime | null {
-    const scheduler = this.scheduler;
-    if (!scheduler || !this.config.animationAgency) {
-      return null;
-    }
-
-    return {
-      apply: (command: GazeRuntimeCommand): boolean => {
-        const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-        const isContinuous = command.mode !== 'manual';
-        const minIntervalMs = isContinuous ? 120 : 0;
-        const delta = Math.hypot(
-          command.target.x - this.lastAgencyTarget.x,
-          command.target.y - this.lastAgencyTarget.y
-        );
-        const shouldSchedule =
-          !isContinuous ||
-          now - this.lastAgencySchedule >= minIntervalMs ||
-          delta >= 0.03;
-
-        if (!shouldSchedule) {
-          return false;
-        }
-
-        const scheduled = scheduler.scheduleGazeTransition(
-          command.target,
-          {
-            eyeEnabled: command.eyeEnabled,
-            headEnabled: command.headEnabled,
-            headFollowEyes: command.headFollowEyes,
-            eyeDuration: command.eyeDuration,
-            headDuration: command.headDuration,
-          }
-        );
-
-        if (scheduled) {
-          this.lastAgencySchedule = now;
-          this.lastAgencyTarget = command.target;
-        }
-
-        return scheduled;
-      },
-      reset: (durationMs = 300): boolean => {
-        scheduler.resetToNeutral(durationMs);
-        this.lastAgencyTarget = { x: 0, y: 0, z: 0 };
-        return true;
-      },
-      dispose: () => {},
-    };
   }
 
   private clampMix(value: number | undefined, fallback: number): number {
@@ -499,7 +447,6 @@ export class EyeHeadTrackingService {
         eyeIntensity: this.config.eyeIntensity,
         headIntensity: this.config.headIntensity,
         engine: this.config.engine,
-        runtime: this.createGazeRuntime(),
         minDelta: 0.003,
         smoothFactor: 1,
         useTransport: false,

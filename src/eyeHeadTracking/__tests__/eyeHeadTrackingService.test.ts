@@ -170,21 +170,25 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
     harness.service.dispose();
   });
 
-  it('uses the animation-agency runtime even when legacy mode flags request engine output', () => {
+  it('preserves the production experimental direct-engine runtime when an animation agency is present', () => {
     const animationAgency = createAnimationAgency();
     const harness = createHarness({
-      gazeMode: 'engine',
+      gazeMode: 'experimental',
       animationAgency,
     });
 
     harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
 
-    expect(animationAgency.schedule).toHaveBeenCalled();
-    expect(harness.engine.transitionContinuum).not.toHaveBeenCalled();
+    expect(animationAgency.schedule).not.toHaveBeenCalled();
+    const eyeYawCall = harness.engine.transitionContinuum.mock.calls.find(
+      ([negAu, posAu]) => negAu === 61 && posAu === 62
+    );
+    const headYawCall = harness.engine.transitionContinuum.mock.calls.find(
+      ([negAu, posAu]) => negAu === 51 && posAu === 52
+    );
 
-    const scheduledNames = animationAgency.schedule.mock.calls.map(([snippet]) => snippet.name);
-    expect(scheduledNames).toContain('eyeHeadTracking/eyeYaw');
-    expect(scheduledNames).toContain('eyeHeadTracking/headYaw');
+    expect(eyeYawCall?.[2]).toBeCloseTo(0.42);
+    expect(headYawCall?.[2]).toBeCloseTo(0.28);
 
     harness.service.dispose();
   });
