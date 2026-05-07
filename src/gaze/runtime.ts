@@ -1,4 +1,4 @@
-import type { GazeRuntime, GazeRuntimeCommand } from './types';
+import type { GazeRuntime, GazeRuntimeCommand, GazeRuntimeResetOptions } from './types';
 
 export interface GazeEngineRuntimeHost {
   transitionContinuum?: (negAu: number, posAu: number, value: number, durationMs: number) => void;
@@ -28,14 +28,22 @@ export function createEngineGazeRuntime(engine: GazeEngineRuntimeHost | undefine
 
       return applied;
     },
-    reset(durationMs = 300): boolean {
+    reset(durationMs = 300, options: GazeRuntimeResetOptions = {}): boolean {
       let applied = false;
-      [61, 62, 63, 64, 51, 52, 53, 54].forEach((au) => {
-        if (engine.transitionAU) {
-          engine.transitionAU(au, 0, durationMs);
-          applied = true;
-        }
-      });
+      const resetEyes = options.eyes ?? true;
+      const resetHead = options.head ?? true;
+
+      if (resetEyes) {
+        applied = applyContinuum(engine, 61, 62, 0, durationMs) || applied;
+        applied = applyContinuum(engine, 64, 63, 0, durationMs) || applied;
+      }
+
+      if (resetHead) {
+        applied = applyContinuum(engine, 51, 52, 0, durationMs) || applied;
+        applied = applyContinuum(engine, 54, 53, 0, durationMs) || applied;
+        applied = applyContinuum(engine, 55, 56, 0, durationMs) || applied;
+      }
+
       return applied;
     },
   };

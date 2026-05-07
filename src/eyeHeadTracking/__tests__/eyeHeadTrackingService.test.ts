@@ -195,4 +195,60 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
 
     harness.service.dispose();
   });
+
+  it('clears active head output when head tracking is disabled', () => {
+    const animationAgency = createAnimationAgency();
+    const harness = createHarness({
+      gazeMode: 'experimental',
+      animationAgency,
+    });
+
+    harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
+    harness.engine.transitionContinuum.mockClear();
+    animationAgency.remove.mockClear();
+
+    harness.service.updateConfig({ headTrackingEnabled: false });
+
+    expect(harness.engine.transitionContinuum).toHaveBeenCalledWith(51, 52, 0, 800);
+    expect(harness.engine.transitionContinuum).toHaveBeenCalledWith(54, 53, 0, 800);
+    expect(harness.engine.transitionContinuum).toHaveBeenCalledWith(55, 56, 0, 800);
+    expect(harness.engine.transitionContinuum).not.toHaveBeenCalledWith(61, 62, 0, expect.any(Number));
+    expect(animationAgency.remove).toHaveBeenCalledWith('eyeHeadTracking/headYaw');
+    expect(animationAgency.remove).toHaveBeenCalledWith('eyeHeadTracking/headPitch');
+    expect(animationAgency.remove).toHaveBeenCalledWith('eyeHeadTracking/headRoll');
+    expect(animationAgency.remove).not.toHaveBeenCalledWith('eyeHeadTracking/eyeYaw');
+
+    harness.engine.transitionContinuum.mockClear();
+    harness.service.setGazeTarget({ x: 0.2, y: 0.05, z: 0 });
+
+    expect(
+      harness.engine.transitionContinuum.mock.calls.some(([negAu, posAu]) => negAu === 61 && posAu === 62)
+    ).toBe(true);
+    expect(
+      harness.engine.transitionContinuum.mock.calls.some(([negAu, posAu]) => negAu === 51 && posAu === 52)
+    ).toBe(false);
+
+    harness.service.dispose();
+  });
+
+  it('refreshes the camera-relative offset when head tracking is enabled after eye-only tracking', () => {
+    const harness = createHarness({
+      eyeTrackingEnabled: true,
+      headTrackingEnabled: false,
+    });
+
+    harness.service.start();
+    harness.getModel.mockClear();
+    harness.engine.transitionContinuum.mockClear();
+    harness.camera.position.set(3, 1, 3);
+
+    harness.service.updateConfig({ headTrackingEnabled: true });
+
+    expect(harness.getModel).toHaveBeenCalledTimes(1);
+    expect(
+      harness.engine.transitionContinuum.mock.calls.some(([negAu, posAu]) => negAu === 51 && posAu === 52)
+    ).toBe(true);
+
+    harness.service.dispose();
+  });
 });
