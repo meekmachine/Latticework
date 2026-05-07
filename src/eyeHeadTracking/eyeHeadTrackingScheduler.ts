@@ -40,6 +40,17 @@ const DEFAULT_TRANSITION_CONFIG: GazeTransitionConfig = {
   headPriority: 15,
 };
 
+const EYE_SNIPPET_NAMES = [
+  'eyeHeadTracking/eyeYaw',
+  'eyeHeadTracking/eyePitch',
+] as const;
+
+const HEAD_SNIPPET_NAMES = [
+  'eyeHeadTracking/headYaw',
+  'eyeHeadTracking/headPitch',
+  'eyeHeadTracking/headRoll',
+] as const;
+
 // ARKit AU IDs for eye and head movements
 export const EYE_HEAD_AUS = {
   // Eye AUs
@@ -365,17 +376,18 @@ export class EyeHeadTrackingScheduler {
    * Stop and remove all tracking snippets
    */
   public stop(): void {
-    // Remove eye tracking snippets
-    this.host.removeSnippet('eyeHeadTracking/eyeYaw');
-    this.host.removeSnippet('eyeHeadTracking/eyePitch');
-
-    // Remove head tracking snippets
-    this.host.removeSnippet('eyeHeadTracking/headYaw');
-    this.host.removeSnippet('eyeHeadTracking/headPitch');
-    this.host.removeSnippet('eyeHeadTracking/headRoll');
-    this.scheduled.clear();
+    this.stopEyes();
+    this.stopHead();
 
     // Stopped - removed all gaze tracking snippets
+  }
+
+  public stopEyes(): void {
+    this.removeSnippets(EYE_SNIPPET_NAMES);
+  }
+
+  public stopHead(): void {
+    this.removeSnippets(HEAD_SNIPPET_NAMES);
   }
 
   public pause(): void {
@@ -412,5 +424,12 @@ export class EyeHeadTrackingScheduler {
    */
   public dispose(): void {
     this.stop();
+  }
+
+  private removeSnippets(names: readonly string[]): void {
+    names.forEach((name) => {
+      this.host.removeSnippet(name);
+      this.scheduled.delete(name);
+    });
   }
 }

@@ -40,9 +40,14 @@ export interface GazeRuntimeCommand {
   headDuration: number;
 }
 
+export interface GazeRuntimeResetOptions {
+  eyes?: boolean;
+  head?: boolean;
+}
+
 export interface GazeRuntime {
   apply(command: GazeRuntimeCommand): boolean | Promise<boolean>;
-  reset?(durationMs?: number): boolean | Promise<boolean>;
+  reset?(durationMs?: number, options?: GazeRuntimeResetOptions): boolean | Promise<boolean>;
   dispose?(): void;
 }
 

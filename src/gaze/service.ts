@@ -10,6 +10,7 @@ import type {
   GazePlanInput,
   GazeResolvedConfig,
   GazeRuntimeCommand,
+  GazeRuntimeResetOptions,
   GazeSetTargetResult,
   GazeState,
   GazeTarget,
@@ -216,14 +217,17 @@ export class GazeService {
     return this.toResult(plan, applied);
   }
 
-  reset(durationMs = 300): boolean {
+  reset(durationMs = 300, options: GazeRuntimeResetOptions = {}): boolean {
     const config = Effect.runSync(Ref.get(this.configRef));
     const runtime = config.runtime ?? createEngineGazeRuntime(config.engine);
-    const applied = runtime?.reset?.(durationMs) ?? false;
+    const resetEyes = options.eyes ?? true;
+    const resetHead = options.head ?? true;
+    const shouldMarkNeutral = resetEyes && resetHead;
+    const applied = runtime?.reset?.(durationMs, { eyes: resetEyes, head: resetHead }) ?? false;
     if (typeof (applied as Promise<boolean>)?.then === 'function') {
       void (applied as Promise<boolean>)
         .then((wasApplied) => {
-          if (wasApplied) {
+          if (wasApplied && shouldMarkNeutral) {
             this.markResetApplied();
           }
         })
@@ -233,7 +237,7 @@ export class GazeService {
       return true;
     }
 
-    if (applied === true) {
+    if (applied === true && shouldMarkNeutral) {
       this.markResetApplied();
     }
 

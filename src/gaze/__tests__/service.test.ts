@@ -176,4 +176,34 @@ describe('GazeService', () => {
 
     service.dispose();
   });
+
+  it('resets only the requested continuum channels through transitionContinuum', () => {
+    const engine = {
+      transitionContinuum: vi.fn(),
+      transitionAU: vi.fn(),
+    };
+    const service = new GazeService({
+      engine,
+      smoothFactor: 1,
+      minDelta: 0.003,
+      eyesEnabled: true,
+      headEnabled: true,
+      headFollowEyes: true,
+    });
+
+    service.setTarget({ x: 0.5, y: 0.25, z: 0 });
+    engine.transitionContinuum.mockClear();
+
+    const applied = service.reset(250, { eyes: false, head: true });
+
+    expect(applied).toBe(true);
+    expect(engine.transitionContinuum).toHaveBeenCalledWith(51, 52, 0, 250);
+    expect(engine.transitionContinuum).toHaveBeenCalledWith(54, 53, 0, 250);
+    expect(engine.transitionContinuum).toHaveBeenCalledWith(55, 56, 0, 250);
+    expect(engine.transitionContinuum).not.toHaveBeenCalledWith(61, 62, 0, expect.any(Number));
+    expect(engine.transitionAU).not.toHaveBeenCalled();
+    expect(service.snapshot.lastAppliedTarget).toEqual({ x: 0.5, y: 0.25, z: 0 });
+
+    service.dispose();
+  });
 });
