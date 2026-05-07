@@ -48,22 +48,10 @@ function applyContinuum(
   value: number,
   durationMs: number
 ): boolean {
-  if (engine.transitionContinuum) {
-    engine.transitionContinuum(negativeAu, positiveAu, value, durationMs);
-    return true;
-  }
-
-  if (!engine.transitionAU) {
+  if (!engine.transitionContinuum) {
     return false;
   }
 
-  if (value < 0) {
-    engine.transitionAU(negativeAu, Math.abs(value), durationMs);
-    engine.transitionAU(positiveAu, 0, durationMs);
-  } else {
-    engine.transitionAU(negativeAu, 0, durationMs);
-    engine.transitionAU(positiveAu, value, durationMs);
-  }
-
+  engine.transitionContinuum(negativeAu, positiveAu, value, durationMs);
   return true;
 }

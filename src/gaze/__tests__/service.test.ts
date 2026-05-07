@@ -121,4 +121,59 @@ describe('GazeService', () => {
 
     service.dispose();
   });
+
+  it('keeps production experimental smoothing by default for direct engine output', () => {
+    const engine = {
+      transitionContinuum: vi.fn(),
+      transitionAU: vi.fn(),
+    };
+    const service = new GazeService({
+      engine,
+      eyesEnabled: true,
+      headEnabled: true,
+      headFollowEyes: true,
+      eyeIntensity: 1,
+      headIntensity: 0.5,
+    });
+    const target = { x: 0.35, y: 0.1, z: 0 };
+    const distance = Math.hypot(target.x, target.y);
+    const alpha = Math.min(0.7, 0.25 + distance * 0.25);
+
+    const result = service.setTarget(target);
+
+    expect(result.applied).toBe(true);
+    expect(result.rawTarget).toEqual(target);
+    expect(result.target.x).toBeCloseTo(target.x * alpha);
+    expect(result.target.y).toBeCloseTo(target.y * alpha);
+    expect(engine.transitionContinuum).toHaveBeenCalledWith(
+      61,
+      62,
+      target.x * alpha,
+      expect.any(Number)
+    );
+    expect(engine.transitionAU).not.toHaveBeenCalled();
+
+    service.dispose();
+  });
+
+  it('does not use transitionAU fallback for Loom3 continuum pairs', () => {
+    const engine = {
+      transitionAU: vi.fn(),
+    };
+    const service = new GazeService({
+      engine,
+      smoothFactor: 1,
+      minDelta: 0.003,
+      eyesEnabled: true,
+      headEnabled: true,
+      headFollowEyes: true,
+    });
+
+    const result = service.setTarget({ x: 0.5, y: 0.25, z: 0 });
+
+    expect(result.applied).toBe(false);
+    expect(engine.transitionAU).not.toHaveBeenCalled();
+
+    service.dispose();
+  });
 });

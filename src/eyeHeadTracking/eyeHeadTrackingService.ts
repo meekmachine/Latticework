@@ -181,9 +181,6 @@ export class EyeHeadTrackingService {
       headFollowEyes: this.config.headFollowEyes,
       eyeIntensity: this.config.eyeIntensity,
       headIntensity: this.config.headIntensity,
-      minDelta: 0.003,
-      // Production experimental behavior is direct and unsmoothed at this layer.
-      smoothFactor: 1,
       engine: this.config.engine,
       useTransport: false,
       clock: {
@@ -447,8 +444,6 @@ export class EyeHeadTrackingService {
         eyeIntensity: this.config.eyeIntensity,
         headIntensity: this.config.headIntensity,
         engine: this.config.engine,
-        minDelta: 0.003,
-        smoothFactor: 1,
         useTransport: false,
       });
     }

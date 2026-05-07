@@ -176,8 +176,11 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
       gazeMode: 'experimental',
       animationAgency,
     });
+    const target = { x: 0.35, y: 0.1, z: 0 };
+    const distance = Math.hypot(target.x, target.y);
+    const alpha = Math.min(0.7, 0.25 + distance * 0.25);
 
-    harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
+    harness.service.setGazeTarget(target);
 
     expect(animationAgency.schedule).not.toHaveBeenCalled();
     const eyeYawCall = harness.engine.transitionContinuum.mock.calls.find(
@@ -187,8 +190,8 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
       ([negAu, posAu]) => negAu === 51 && posAu === 52
     );
 
-    expect(eyeYawCall?.[2]).toBeCloseTo(0.42);
-    expect(headYawCall?.[2]).toBeCloseTo(0.28);
+    expect(eyeYawCall?.[2]).toBeCloseTo(target.x * alpha * 1.2);
+    expect(headYawCall?.[2]).toBeCloseTo(target.x * alpha * 0.8);
 
     harness.service.dispose();
   });
