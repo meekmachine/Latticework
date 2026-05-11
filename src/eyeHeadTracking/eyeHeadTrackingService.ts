@@ -1,7 +1,7 @@
 /**
  * Eye and Head Tracking Service
  * Coordinates eye and head movements that follow mouth animations
- * Uses GazeService for shared eye/head state and direct engine output.
+ * Uses GazeService for shared eye/head state and scheduler-backed output.
  */
 import type {
   EyeHeadTrackingConfig,
@@ -12,7 +12,7 @@ import type {
 } from './types';
 import { DEFAULT_EYE_HEAD_CONFIG } from './types';
 import { EyeHeadTrackingScheduler, type EyeHeadHostCaps } from './eyeHeadTrackingScheduler';
-import { GazeService } from '../gaze';
+import { GazeService, type GazeRuntime, type GazeRuntimeCommand, type GazeRuntimeResetOptions } from '../gaze';
 import {
   CameraRelativeGazeTracker,
   computeCharacterRelativePointerTarget,
@@ -167,26 +167,59 @@ export class EyeHeadTrackingService {
       headPriority: this.config.headPriority ?? DEFAULT_EYE_HEAD_CONFIG.headPriority,
     });
 
-    // Match the production experimental path: GazeService owns state/streams,
-    // while output applies through the direct engine runtime for responsive
-    // cursor/webcam tracking. The animation scheduler remains available for
-    // other services, but real-time gaze must not be quantized through it.
     this.gazeService = this.createGazeService();
   }
 
   private createGazeService(): GazeService {
+    const runtime = this.scheduler ? this.createSchedulerGazeRuntime(this.scheduler) : null;
+
     return new GazeService({
       eyesEnabled: this.config.eyeTrackingEnabled,
       headEnabled: this.config.headTrackingEnabled,
       headFollowEyes: this.config.headFollowEyes,
       eyeIntensity: this.config.eyeIntensity,
       headIntensity: this.config.headIntensity,
-      engine: this.config.engine,
+      runtime,
+      engine: runtime ? undefined : this.config.engine,
       useTransport: false,
       clock: {
         now: () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()),
       },
     });
+  }
+
+  private createSchedulerGazeRuntime(scheduler: EyeHeadTrackingScheduler): GazeRuntime {
+    return {
+      apply: (command: GazeRuntimeCommand) => {
+        const headFollowDelay = command.headEnabled && command.headFollowEyes
+          ? this.config.headFollowDelay ?? DEFAULT_EYE_HEAD_CONFIG.headFollowDelay
+          : 0;
+
+        return scheduler.scheduleGazeTransition(command.target, {
+          eyeEnabled: command.eyeEnabled,
+          headEnabled: command.headEnabled,
+          headFollowEyes: command.headFollowEyes,
+          eyeDuration: command.eyeDuration,
+          headDuration: command.headDuration + headFollowDelay,
+        });
+      },
+      reset: (durationMs = 300, options: GazeRuntimeResetOptions = {}) => {
+        const resetEyes = options.eyes ?? true;
+        const resetHead = options.head ?? true;
+        if (!resetEyes && !resetHead) {
+          return false;
+        }
+
+        return scheduler.resetToNeutral(durationMs, {
+          eyeEnabled: resetEyes,
+          headEnabled: resetHead,
+          headFollowEyes: true,
+        });
+      },
+      dispose: () => {
+        scheduler.stop();
+      },
+    };
   }
 
   private clampMix(value: number | undefined, fallback: number): number {
@@ -401,6 +434,7 @@ export class EyeHeadTrackingService {
     const wasEyeTrackingEnabled = !!this.config.eyeTrackingEnabled;
     const wasHeadTrackingEnabled = !!this.config.headTrackingEnabled;
     const wasHeadFollowEyes = this.config.headFollowEyes !== false;
+    const animationAgencyChanged = Object.prototype.hasOwnProperty.call(config, 'animationAgency');
     this.config = {
       ...this.config,
       ...config,
@@ -417,7 +451,7 @@ export class EyeHeadTrackingService {
       (!wasHeadTrackingEnabled && isHeadTrackingEnabled) ||
       (wasHeadTrackingEnabled && !wasHeadFollowEyes && isHeadFollowEyes);
 
-    if (config.animationAgency !== undefined) {
+    if (animationAgencyChanged) {
       this.initializeScheduler();
     } else {
       this.scheduler?.updateConfig?.({
@@ -443,13 +477,15 @@ export class EyeHeadTrackingService {
 
     // Update experimental gaze config
     if (this.gazeService) {
+      const runtime = this.scheduler ? this.createSchedulerGazeRuntime(this.scheduler) : null;
       this.gazeService.updateConfig({
         eyesEnabled: this.config.eyeTrackingEnabled,
         headEnabled: this.config.headTrackingEnabled,
         headFollowEyes: this.config.headFollowEyes,
         eyeIntensity: this.config.eyeIntensity,
         headIntensity: this.config.headIntensity,
-        engine: this.config.engine,
+        runtime,
+        engine: runtime ? undefined : this.config.engine,
         useTransport: false,
       });
     }

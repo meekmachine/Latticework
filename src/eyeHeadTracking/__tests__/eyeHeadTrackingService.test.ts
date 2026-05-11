@@ -74,8 +74,8 @@ function createAnimationAgency() {
   return {
     playing: false,
     play: vi.fn(),
-    schedule: vi.fn((snippet: { name: string }) => snippet.name),
-    updateSnippet: vi.fn((snippet: { name: string }) => snippet.name),
+    schedule: vi.fn((snippet: any) => snippet.name),
+    updateSnippet: vi.fn((snippet: any) => snippet.name),
     seek: vi.fn(),
     pauseSnippet: vi.fn(),
     resumeSnippet: vi.fn(),
@@ -170,7 +170,7 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
     harness.service.dispose();
   });
 
-  it('preserves the production experimental direct-engine runtime when an animation agency is present', () => {
+  it('routes experimental gaze output through the animation scheduler when an animation agency is present', () => {
     const animationAgency = createAnimationAgency();
     const harness = createHarness({
       gazeMode: 'experimental',
@@ -182,16 +182,19 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
 
     harness.service.setGazeTarget(target);
 
-    expect(animationAgency.schedule).not.toHaveBeenCalled();
-    const eyeYawCall = harness.engine.transitionContinuum.mock.calls.find(
-      ([negAu, posAu]) => negAu === 61 && posAu === 62
+    expect(harness.engine.transitionContinuum).not.toHaveBeenCalled();
+    expect(animationAgency.schedule).toHaveBeenCalled();
+
+    const scheduledSnippets = animationAgency.schedule.mock.calls.map(([snippet]) => snippet);
+    const eyeYawSnippet = scheduledSnippets.find(
+      (snippet) => snippet.name === 'eyeHeadTracking/eyeYaw'
     );
-    const headYawCall = harness.engine.transitionContinuum.mock.calls.find(
-      ([negAu, posAu]) => negAu === 51 && posAu === 52
+    const headYawSnippet = scheduledSnippets.find(
+      (snippet) => snippet.name === 'eyeHeadTracking/headYaw'
     );
 
-    expect(eyeYawCall?.[2]).toBeCloseTo(target.x * alpha * 1.2);
-    expect(headYawCall?.[2]).toBeCloseTo(target.x * alpha * 0.8);
+    expect(eyeYawSnippet?.curves['62'][1].intensity).toBeCloseTo(target.x * alpha * 1.2);
+    expect(headYawSnippet?.curves['52'][1].intensity).toBeCloseTo(target.x * alpha * 0.8);
 
     harness.service.dispose();
   });
@@ -205,28 +208,32 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
 
     harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
     harness.engine.transitionContinuum.mockClear();
+    animationAgency.schedule.mockClear();
     animationAgency.remove.mockClear();
 
     harness.service.updateConfig({ headTrackingEnabled: false });
 
-    expect(harness.engine.transitionContinuum).toHaveBeenCalledWith(51, 52, 0, 800);
-    expect(harness.engine.transitionContinuum).toHaveBeenCalledWith(54, 53, 0, 800);
-    expect(harness.engine.transitionContinuum).toHaveBeenCalledWith(55, 56, 0, 800);
-    expect(harness.engine.transitionContinuum).not.toHaveBeenCalledWith(61, 62, 0, expect.any(Number));
+    expect(harness.engine.transitionContinuum).not.toHaveBeenCalled();
     expect(animationAgency.remove).toHaveBeenCalledWith('eyeHeadTracking/headYaw');
     expect(animationAgency.remove).toHaveBeenCalledWith('eyeHeadTracking/headPitch');
     expect(animationAgency.remove).toHaveBeenCalledWith('eyeHeadTracking/headRoll');
     expect(animationAgency.remove).not.toHaveBeenCalledWith('eyeHeadTracking/eyeYaw');
+    const resetNames = animationAgency.schedule.mock.calls.map(([snippet]) => snippet.name);
+    expect(resetNames).toEqual(expect.arrayContaining([
+      'eyeHeadTracking/headYaw',
+      'eyeHeadTracking/headPitch',
+      'eyeHeadTracking/headRoll',
+    ]));
+    expect(resetNames).not.toContain('eyeHeadTracking/eyeYaw');
 
     harness.engine.transitionContinuum.mockClear();
+    animationAgency.schedule.mockClear();
     harness.service.setGazeTarget({ x: 0.2, y: 0.05, z: 0 });
+    const trackingNames = animationAgency.schedule.mock.calls.map(([snippet]) => snippet.name);
 
-    expect(
-      harness.engine.transitionContinuum.mock.calls.some(([negAu, posAu]) => negAu === 61 && posAu === 62)
-    ).toBe(true);
-    expect(
-      harness.engine.transitionContinuum.mock.calls.some(([negAu, posAu]) => negAu === 51 && posAu === 52)
-    ).toBe(false);
+    expect(harness.engine.transitionContinuum).not.toHaveBeenCalled();
+    expect(trackingNames).toContain('eyeHeadTracking/eyeYaw');
+    expect(trackingNames).not.toContain('eyeHeadTracking/headYaw');
 
     harness.service.dispose();
   });
