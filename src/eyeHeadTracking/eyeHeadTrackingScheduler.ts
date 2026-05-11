@@ -299,21 +299,15 @@ export class EyeHeadTrackingScheduler {
   }
 
   /**
-   * Schedule a snippet. Always schedules fresh - the mixer's crossfade handles
-   * smooth transitions from the previous value to the new target.
+   * Schedule a snippet by name. The animation service treats repeated names as
+   * an upsert, so the new inherited first keyframe is resolved from the live
+   * pose without briefly removing the channel from the mixer.
    * Returns true if the snippet is active after this call.
    */
   private upsertSnippet(snippet: any): boolean {
     const name = snippet?.name || '';
 
     try {
-      // Remove existing snippet first to ensure clean transition
-      if (this.scheduled.has(name)) {
-        this.host.removeSnippet(name);
-        this.scheduled.delete(name);
-      }
-
-      // Schedule new snippet - mixer crossfade handles the transition
       const scheduledName = this.host.scheduleSnippet(snippet) ?? name;
       if (scheduledName) {
         this.scheduled.add(scheduledName);
@@ -415,8 +409,28 @@ export class EyeHeadTrackingScheduler {
   /**
    * Reset gaze to center (neutral position)
    */
-  public resetToNeutral(duration: number = 300): void {
-    this.scheduleGazeTransition({ x: 0, y: 0, z: 0 }, { duration });
+  public resetToNeutral(
+    duration: number = 300,
+    options?: {
+      eyeEnabled?: boolean;
+      headEnabled?: boolean;
+      headFollowEyes?: boolean;
+    }
+  ): boolean {
+    const {
+      eyeEnabled = true,
+      headEnabled = true,
+      headFollowEyes = true,
+    } = options || {};
+
+    if (!eyeEnabled && !headEnabled) {
+      return false;
+    }
+
+    return this.scheduleGazeTransition(
+      { x: 0, y: 0, z: 0 },
+      { duration, eyeEnabled, headEnabled, headFollowEyes }
+    );
   }
 
   /**
