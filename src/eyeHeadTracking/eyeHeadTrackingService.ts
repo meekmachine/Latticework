@@ -1,7 +1,7 @@
 /**
  * Eye and Head Tracking Service
  * Coordinates eye and head movements that follow mouth animations
- * Uses the animation scheduler to drive both eyes and head with a shared controller.
+ * Uses GazeService for shared eye/head state and scheduler-backed output.
  */
 import type {
   EyeHeadTrackingConfig,
@@ -12,7 +12,7 @@ import type {
 } from './types';
 import { DEFAULT_EYE_HEAD_CONFIG } from './types';
 import { EyeHeadTrackingScheduler, type EyeHeadHostCaps } from './eyeHeadTrackingScheduler';
-import { NullGazeAgency, type GazeAgency, GazeService } from '../gaze';
+import { GazeService, type GazeRuntime, type GazeRuntimeCommand, type GazeRuntimeResetOptions } from '../gaze';
 import {
   CameraRelativeGazeTracker,
   computeCharacterRelativePointerTarget,
@@ -26,7 +26,6 @@ import {
 } from './eyeHeadTrackingMachine';
 import { fromEvent, type Subscription, animationFrameScheduler } from 'rxjs';
 import { filter, map, pairwise, throttleTime } from 'rxjs/operators';
-import { EyeHeadPlanner } from './planner';
 
 // Declare global BlazeFace from CDN
 declare const blazeface: {
@@ -39,8 +38,7 @@ export class EyeHeadTrackingService {
   private callbacks: EyeHeadTrackingCallbacks;
 
   private scheduler: EyeHeadTrackingScheduler | null = null;
-  private gazeAgency: GazeAgency | null = null;
-  private experimentalGaze: GazeService | null = null;
+  private gazeService: GazeService | null = null;
 
   // Animation snippets
   private eyeSnippets: Map<string, AnimationSnippet> = new Map();
@@ -55,8 +53,6 @@ export class EyeHeadTrackingService {
   private mouseSubscription: Subscription | null = null;
   private machine: ReturnType<typeof createActor<EyeHeadTrackingMachine>> | null = null;
   private filteredGaze: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
-  private lastMouseUpdate: number = 0;
-  private planner: EyeHeadPlanner;
 
   // Webcam tracking state (internal - no React hooks)
   private webcamModel: any = null;
@@ -66,8 +62,6 @@ export class EyeHeadTrackingService {
   private webcamFaceDetected: boolean = false;
   private webcamListeners: Set<(detected: boolean, landmarks?: Array<{ x: number; y: number }>) => void> = new Set();
   private lastWebcamUpdate: number = 0;
-  private lastAgencySchedule: number = 0;
-  private lastAgencyTarget: GazeTarget = { x: 0, y: 0, z: 0 };
   private isStarted = false;
   private cameraRelativeGazeTracker: CameraRelativeGazeTracker | null = null;
 
@@ -81,7 +75,6 @@ export class EyeHeadTrackingService {
     };
 
     this.callbacks = callbacks;
-    this.planner = new EyeHeadPlanner();
 
     this.state = {
       eyeStatus: 'idle',
@@ -118,18 +111,12 @@ export class EyeHeadTrackingService {
   }
 
   private initializeScheduler(): void {
+    this.gazeService?.dispose();
+    this.gazeService = null;
+
     if (!this.config.animationAgency) {
       this.scheduler = null;
-      this.gazeAgency = new NullGazeAgency();
-      this.experimentalGaze = new GazeService({
-        eyesEnabled: this.config.eyeTrackingEnabled,
-        headEnabled: this.config.headTrackingEnabled,
-        headFollowEyes: this.config.headFollowEyes,
-        eyeIntensity: this.config.eyeIntensity,
-        headIntensity: this.config.headIntensity,
-        engine: this.config.engine,
-        useTransport: false,
-      });
+      this.gazeService = this.createGazeService();
       return;
     }
 
@@ -180,20 +167,59 @@ export class EyeHeadTrackingService {
       headPriority: this.config.headPriority ?? DEFAULT_EYE_HEAD_CONFIG.headPriority,
     });
 
-    // Experimental gaze agency (currently a stub) lives alongside legacy scheduler
-    this.gazeAgency = new NullGazeAgency({
-      eyesEnabled: this.config.eyeTrackingEnabled,
-      headEnabled: this.config.headTrackingEnabled,
-    });
-    this.experimentalGaze = new GazeService({
+    this.gazeService = this.createGazeService();
+  }
+
+  private createGazeService(): GazeService {
+    const runtime = this.scheduler ? this.createSchedulerGazeRuntime(this.scheduler) : null;
+
+    return new GazeService({
       eyesEnabled: this.config.eyeTrackingEnabled,
       headEnabled: this.config.headTrackingEnabled,
       headFollowEyes: this.config.headFollowEyes,
       eyeIntensity: this.config.eyeIntensity,
       headIntensity: this.config.headIntensity,
-      engine: this.config.engine,
+      runtime,
+      engine: runtime ? undefined : this.config.engine,
       useTransport: false,
+      clock: {
+        now: () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()),
+      },
     });
+  }
+
+  private createSchedulerGazeRuntime(scheduler: EyeHeadTrackingScheduler): GazeRuntime {
+    return {
+      apply: (command: GazeRuntimeCommand) => {
+        const headFollowDelay = command.headEnabled && command.headFollowEyes
+          ? this.config.headFollowDelay ?? DEFAULT_EYE_HEAD_CONFIG.headFollowDelay
+          : 0;
+
+        return scheduler.scheduleGazeTransition(command.target, {
+          eyeEnabled: command.eyeEnabled,
+          headEnabled: command.headEnabled,
+          headFollowEyes: command.headFollowEyes,
+          eyeDuration: command.eyeDuration,
+          headDuration: command.headDuration + headFollowDelay,
+        });
+      },
+      reset: (durationMs = 300, options: GazeRuntimeResetOptions = {}) => {
+        const resetEyes = options.eyes ?? true;
+        const resetHead = options.head ?? true;
+        if (!resetEyes && !resetHead) {
+          return false;
+        }
+
+        return scheduler.resetToNeutral(durationMs, {
+          eyeEnabled: resetEyes,
+          headEnabled: resetHead,
+          headFollowEyes: true,
+        });
+      },
+      dispose: () => {
+        scheduler.stop();
+      },
+    };
   }
 
   private clampMix(value: number | undefined, fallback: number): number {
@@ -329,7 +355,30 @@ export class EyeHeadTrackingService {
    * @param duration - Transition duration in milliseconds (default: 300ms)
    */
   public resetToNeutral(duration: number = 300): void {
-    this.setGazeTarget({ x: 0, y: 0, z: 0 });
+    this.clearReturnToNeutralTimer();
+
+    const neutral = { x: 0, y: 0, z: 0 };
+    const applied = this.gazeService?.reset(duration) ?? false;
+
+    if (!applied) {
+      this.applyGazeToCharacter(neutral, {
+        applyEyes: this.config.eyeTrackingEnabled,
+        applyHead: this.config.headTrackingEnabled,
+      });
+    }
+
+    this.filteredGaze = neutral;
+    this.state.targetGaze = neutral;
+    this.state.currentGaze = neutral;
+    this.state.lastGazeUpdateTime = Date.now();
+    this.machine?.send({ type: 'SET_TARGET', target: neutral });
+    this.machine?.send({
+      type: 'SET_STATUS',
+      eye: this.state.eyeStatus,
+      head: this.state.headStatus,
+      lastApplied: neutral,
+    });
+    this.callbacks.onGazeChange?.(neutral);
   }
 
   /**
@@ -382,19 +431,27 @@ export class EyeHeadTrackingService {
    */
   public updateConfig(config: Partial<EyeHeadTrackingConfig>): void {
     const previousCameraController = this.config.cameraController;
+    const wasEyeTrackingEnabled = !!this.config.eyeTrackingEnabled;
+    const wasHeadTrackingEnabled = !!this.config.headTrackingEnabled;
+    const wasHeadFollowEyes = this.config.headFollowEyes !== false;
+    const animationAgencyChanged = Object.prototype.hasOwnProperty.call(config, 'animationAgency');
     this.config = {
       ...this.config,
       ...config,
     };
+    const isEyeTrackingEnabled = !!this.config.eyeTrackingEnabled;
+    const isHeadTrackingEnabled = !!this.config.headTrackingEnabled;
+    const isHeadFollowEyes = this.config.headFollowEyes !== false;
+    const disabledEyes = wasEyeTrackingEnabled && !isEyeTrackingEnabled;
+    const disabledHead =
+      (wasHeadTrackingEnabled && !isHeadTrackingEnabled) ||
+      (wasHeadTrackingEnabled && wasHeadFollowEyes && !isHeadFollowEyes);
+    const enabledEyes = !wasEyeTrackingEnabled && isEyeTrackingEnabled;
+    const enabledHead =
+      (!wasHeadTrackingEnabled && isHeadTrackingEnabled) ||
+      (wasHeadTrackingEnabled && !wasHeadFollowEyes && isHeadFollowEyes);
 
-    // Keep useAnimationAgency in sync when gazeMode flips
-    if (config.gazeMode) {
-      // Legacy + experimental both route through the scheduler/agency,
-      // engine mode uses direct AU transitions.
-      this.config.useAnimationAgency = config.gazeMode !== 'engine';
-    }
-
-    if (config.animationAgency !== undefined) {
+    if (animationAgencyChanged) {
       this.initializeScheduler();
     } else {
       this.scheduler?.updateConfig?.({
@@ -418,24 +475,35 @@ export class EyeHeadTrackingService {
       this.syncCameraTracking();
     }
 
-    if (
-      config.cameraController !== undefined ||
-      config.eyeTrackingEnabled !== undefined ||
-      config.headTrackingEnabled !== undefined
-    ) {
-      this.cameraRelativeGazeTracker?.setEnabled(this.isCameraTrackingActive());
-    }
-
     // Update experimental gaze config
-    if (this.experimentalGaze) {
-      this.experimentalGaze.updateConfig({
+    if (this.gazeService) {
+      const runtime = this.scheduler ? this.createSchedulerGazeRuntime(this.scheduler) : null;
+      this.gazeService.updateConfig({
         eyesEnabled: this.config.eyeTrackingEnabled,
         headEnabled: this.config.headTrackingEnabled,
         headFollowEyes: this.config.headFollowEyes,
         eyeIntensity: this.config.eyeIntensity,
         headIntensity: this.config.headIntensity,
-        engine: this.config.engine,
+        runtime,
+        engine: runtime ? undefined : this.config.engine,
+        useTransport: false,
       });
+    }
+
+    if (disabledEyes || disabledHead) {
+      this.clearDisabledTrackingOutputs({ eyes: disabledEyes, head: disabledHead });
+    }
+
+    if (
+      config.cameraController !== undefined ||
+      config.eyeTrackingEnabled !== undefined ||
+      config.headTrackingEnabled !== undefined ||
+      config.headFollowEyes !== undefined
+    ) {
+      this.cameraRelativeGazeTracker?.setEnabled(this.isCameraTrackingActive());
+      if ((enabledEyes || enabledHead) && this.isStarted && this.isTrackingEnabled()) {
+        this.applyCameraRelativeOffsetForCurrentTarget({ force: true });
+      }
     }
 
     this.machine?.send({ type: 'UPDATE_CONFIG', config: this.config });
@@ -491,7 +559,7 @@ export class EyeHeadTrackingService {
 
     this.trackingMode = mode;
     this.machine?.send({ type: 'SET_MODE', mode });
-    this.experimentalGaze?.setMode(mode);
+    this.gazeService?.setMode(mode);
 
     // Setup new mode
     if (mode === 'mouse') {
@@ -655,7 +723,7 @@ export class EyeHeadTrackingService {
           const gazeX = avgX * 2 - 1;
           const gazeY = -(avgY * 2 - 1);
 
-          // Use setGazeTarget which respects useAnimationAgency toggle
+          // Use the same modern gaze runtime path as manual and mouse input.
           this.setGazeTarget({ x: gazeX, y: gazeY, z: 0 });
 
           // Notify listeners if face detection status changed
@@ -763,7 +831,7 @@ export class EyeHeadTrackingService {
     return this.cameraRelativeGazeTracker?.getOffset() ?? { x: 0, y: 0 };
   }
 
-  private applyCameraRelativeOffsetForCurrentTarget(): void {
+  private applyCameraRelativeOffsetForCurrentTarget(options: { force?: boolean } = {}): void {
     if (!this.isStarted || !this.isTrackingEnabled()) {
       return;
     }
@@ -772,6 +840,7 @@ export class EyeHeadTrackingService {
       applyEyes: this.config.eyeTrackingEnabled,
       applyHead: this.config.headTrackingEnabled,
       skipMachine: this.trackingMode !== 'manual',
+      force: options.force,
     });
   }
 
@@ -802,6 +871,64 @@ export class EyeHeadTrackingService {
     this.cameraRelativeGazeTracker.setEnabled(this.isCameraTrackingActive());
   }
 
+  private clearDisabledTrackingOutputs(channels: { eyes?: boolean; head?: boolean }): void {
+    const duration = this.config.returnToNeutralDuration ?? 300;
+
+    if (channels.eyes) {
+      this.scheduler?.stopEyes?.();
+    }
+    if (channels.head) {
+      this.scheduler?.stopHead?.();
+    }
+
+    const applied = this.gazeService?.reset(duration, {
+      eyes: !!channels.eyes,
+      head: !!channels.head,
+    }) ?? false;
+
+    if (!applied) {
+      this.resetContinuumChannels(channels, duration);
+    }
+
+    if (channels.eyes) {
+      this.state.eyeStatus = 'idle';
+      this.state.eyeIntensity = 0;
+      this.callbacks.onEyeStop?.();
+    }
+    if (channels.head) {
+      this.state.headStatus = 'idle';
+      this.state.headIntensity = 0;
+      this.callbacks.onHeadStop?.();
+    }
+
+    this.machine?.send({
+      type: 'SET_STATUS',
+      eye: this.state.eyeStatus,
+      head: this.state.headStatus,
+      lastApplied: this.state.currentGaze,
+    });
+  }
+
+  private resetContinuumChannels(
+    channels: { eyes?: boolean; head?: boolean },
+    duration: number
+  ): void {
+    const engine = this.config.engine;
+    if (!engine?.transitionContinuum) {
+      return;
+    }
+
+    if (channels.eyes) {
+      engine.transitionContinuum(61, 62, 0, duration);
+      engine.transitionContinuum(64, 63, 0, duration);
+    }
+    if (channels.head) {
+      engine.transitionContinuum(51, 52, 0, duration);
+      engine.transitionContinuum(54, 53, 0, duration);
+      engine.transitionContinuum(55, 56, 0, duration);
+    }
+  }
+
   /**
    * Apply gaze to character using smooth transitions
    * Converts normalized gaze coordinates to AU values
@@ -813,187 +940,35 @@ export class EyeHeadTrackingService {
    */
   private applyGazeToCharacter(
     target: GazeTarget,
-    options?: { applyEyes?: boolean; applyHead?: boolean; skipMachine?: boolean }
+    options?: { applyEyes?: boolean; applyHead?: boolean; skipMachine?: boolean; force?: boolean }
   ): void {
     // Early return if both eye and head tracking are disabled (already checked in setGazeTarget, but double-check)
     if (!this.config.eyeTrackingEnabled && !this.config.headTrackingEnabled) {
       return;
     }
 
-    const { x, y } = target;
     const eyeIntensity = this.config.eyeIntensity ?? 1.0;
     const headIntensity = this.config.headIntensity ?? 0.5;
 
     const cameraOffset = this.getCameraRelativeOffset();
-    const adjustedX = x + cameraOffset.x;
-    const adjustedY = y + cameraOffset.y;
-    const adjustedTarget = { x: adjustedX, y: adjustedY, z: 0 };
+    const adjustedTarget = {
+      x: target.x + cameraOffset.x,
+      y: target.y + cameraOffset.y,
+      z: target.z ?? 0,
+    };
     const applyEyes = options?.applyEyes ?? true;
     const applyHead = options?.applyHead ?? true;
 
-    // Smooth target to prevent micro-jumps (especially near center crossing)
-    const gazeMode = this.config.gazeMode ?? DEFAULT_EYE_HEAD_CONFIG.gazeMode;
-    if (gazeMode === 'experimental' && this.experimentalGaze) {
-      this.experimentalGaze.setTarget(adjustedTarget);
-
-      if (applyEyes && this.config.eyeTrackingEnabled) {
-        this.state.eyeIntensity = eyeIntensity;
-      }
-      if (applyHead && this.config.headTrackingEnabled) {
-        this.state.headIntensity = headIntensity;
-      }
-
-      this.filteredGaze = adjustedTarget;
-      this.state.currentGaze = adjustedTarget;
-
-      if (!options?.skipMachine) {
-        this.machine?.send({
-          type: 'SET_STATUS',
-          lastApplied: this.state.currentGaze,
-        });
-      }
-      return;
+    if (!this.gazeService) {
+      this.gazeService = this.createGazeService();
     }
 
-    const useAgency = gazeMode === 'legacy' || gazeMode === 'experimental'
-      ? true
-      : (this.config.useAnimationAgency ?? DEFAULT_EYE_HEAD_CONFIG.useAnimationAgency);
-    const rawTarget = { x: adjustedX, y: adjustedY, z: 0 };
-    // Fallback: only use raw target path when experimental mode is selected but
-    // experimental gaze runtime is unavailable for any reason.
-    const useExperimentalSchedulerFallback = gazeMode === 'experimental' && !this.experimentalGaze;
-    const prev =
-      useAgency && this.trackingMode !== 'manual'
-        ? this.state.currentGaze
-        : (this.filteredGaze ?? this.state.currentGaze);
-    const rawDistance = Math.hypot(adjustedX - prev.x, adjustedY - prev.y);
-    const baseAlpha = this.trackingMode === 'mouse' ? 0.2 : 0.18;
-    const alpha = Math.min(0.7, baseAlpha + rawDistance * 0.25); // Larger moves respond faster, but cap to avoid snaps
-    const smoothX = prev.x + (adjustedX - prev.x) * alpha;
-    const smoothY = prev.y + (adjustedY - prev.y) * alpha;
-    const smoothedTarget = { x: smoothX, y: smoothY, z: 0 };
-    const targetForPlanning = useExperimentalSchedulerFallback ? rawTarget : smoothedTarget;
-
-    // Calculate distance from current position (using smoothed coordinates)
-    const { x: currentX, y: currentY } = this.state.currentGaze;
-    const deltaX = targetForPlanning.x - currentX;
-    const deltaY = targetForPlanning.y - currentY;
-    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-
-    // Ignore ultra-small changes to avoid rescheduling noise when crossing center
-    if (distance < 0.003) {
-      if (!useAgency) {
-        this.filteredGaze = targetForPlanning;
-      }
-      return;
-    }
-
-    // Trajectory-aware planning: estimate velocity and lead a short horizon to avoid over-scheduling
-    const nowMs = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-    const plan = this.planner.plan({
-      target: targetForPlanning,
-      mode: this.trackingMode,
-      nowMs,
-      lastAgencyTarget: this.lastAgencyTarget,
-      currentGaze: this.state.currentGaze,
-      headFollowDelay: this.config.headFollowEyes ? (this.config.headFollowDelay ?? 0) : 0,
+    const result = this.gazeService.setTarget(adjustedTarget, {
+      eyeEnabled: applyEyes && !!this.config.eyeTrackingEnabled,
+      headEnabled: applyHead && !!this.config.headTrackingEnabled,
+      headFollowEyes: this.config.headFollowEyes,
+      force: options?.force,
     });
-    if (!plan.shouldSchedule) {
-      this.filteredGaze = targetForPlanning;
-      return;
-    }
-
-    // Scale duration based on distance traveled
-    // Base durations: eye 150-400ms, head 250-600ms
-    // Use different scaling for mouse (faster response) vs manual
-    const eyeDuration = plan.eyeDuration;
-    const headDuration = plan.headDuration;
-
-    const scheduler = this.scheduler;
-
-    // Use animation agency if enabled AND available, otherwise use direct engine calls
-    let applied = false;
-
-    if (useAgency && scheduler && this.config.animationAgency) {
-      const now = performance.now();
-      const isContinuous = this.trackingMode !== 'manual';
-      const minIntervalMs = isContinuous ? 120 : 0;
-      const delta = Math.hypot(
-        targetForPlanning.x - this.lastAgencyTarget.x,
-        targetForPlanning.y - this.lastAgencyTarget.y
-      );
-      const shouldSchedule =
-        !isContinuous ||
-        now - this.lastAgencySchedule >= minIntervalMs ||
-        delta >= 0.03;
-
-      if (shouldSchedule) {
-        const scheduled = scheduler.scheduleGazeTransition(
-          plan.target,
-          {
-            eyeEnabled: applyEyes && this.config.eyeTrackingEnabled,
-            headEnabled: applyHead && this.config.headTrackingEnabled,
-            headFollowEyes: this.config.headFollowEyes,
-            eyeDuration: eyeDuration,
-            headDuration: headDuration,
-          }
-        );
-        if (scheduled) {
-          this.lastAgencySchedule = now;
-          this.lastAgencyTarget = targetForPlanning;
-          applied = true;
-        }
-      }
-    } else if (this.config.engine) {
-      // Direct engine path - bypasses animation scheduler
-      // CRITICAL: Must set BOTH AUs in each continuum pair to avoid snap/stick bugs
-      // Continuum axis = positiveAU - negativeAU, so leftover values cause incorrect results
-      if (applyEyes && this.config.eyeTrackingEnabled) {
-        const eyeYaw = targetForPlanning.x * eyeIntensity;
-        const eyePitch = targetForPlanning.y * eyeIntensity;
-        // Eyes: use transitionContinuum to avoid bone axis overwrite bug
-        // (calling transitionAU on both AUs in a pair overwrites the bone - see engine/README.md)
-        if (this.config.engine.transitionContinuum) {
-          this.config.engine.transitionContinuum(61, 62, eyeYaw, eyeDuration);
-          this.config.engine.transitionContinuum(64, 63, eyePitch, eyeDuration);
-        } else {
-          // Fallback: only set the active direction AU
-          if (eyeYaw < 0) {
-            this.config.engine.transitionAU?.(61, Math.abs(eyeYaw), eyeDuration);
-          } else {
-            this.config.engine.transitionAU?.(62, eyeYaw, eyeDuration);
-          }
-          if (eyePitch < 0) {
-            this.config.engine.transitionAU?.(64, Math.abs(eyePitch), eyeDuration);
-          } else {
-            this.config.engine.transitionAU?.(63, eyePitch, eyeDuration);
-          }
-        }
-      }
-
-      if (applyHead && this.config.headTrackingEnabled && this.config.headFollowEyes) {
-        const headYaw = targetForPlanning.x * headIntensity;
-        const headPitch = targetForPlanning.y * headIntensity;
-        // Head: use transitionContinuum to avoid bone axis overwrite bug
-        if (this.config.engine.transitionContinuum) {
-          this.config.engine.transitionContinuum(51, 52, headYaw, headDuration);
-          this.config.engine.transitionContinuum(54, 53, headPitch, headDuration);
-        } else {
-          // Fallback: only set the active direction AU
-          if (headYaw < 0) {
-            this.config.engine.transitionAU?.(51, Math.abs(headYaw), headDuration);
-          } else {
-            this.config.engine.transitionAU?.(52, headYaw, headDuration);
-          }
-          if (headPitch < 0) {
-            this.config.engine.transitionAU?.(54, Math.abs(headPitch), headDuration);
-          } else {
-            this.config.engine.transitionAU?.(53, headPitch, headDuration);
-          }
-        }
-      }
-      applied = true;
-    }
 
     if (applyEyes && this.config.eyeTrackingEnabled) {
       this.state.eyeIntensity = eyeIntensity;
@@ -1002,16 +977,18 @@ export class EyeHeadTrackingService {
       this.state.headIntensity = headIntensity;
     }
 
-    // Update current gaze position for next distance calculation (use adjusted coordinates)
-    if (applied || !useAgency) {
-      this.filteredGaze = targetForPlanning;
-    }
-    if (applied) {
-      this.state.currentGaze = targetForPlanning;
+    const plannedTarget = {
+      x: result.target.x,
+      y: result.target.y,
+      z: result.target.z ?? 0,
+    };
+    this.filteredGaze = plannedTarget;
+    if (result.applied) {
+      this.state.currentGaze = plannedTarget;
     }
 
     // Skip machine updates for continuous tracking (mouse/webcam) to avoid overhead
-    if (applied && !options?.skipMachine) {
+    if (result.applied && !options?.skipMachine) {
       this.machine?.send({
         type: 'SET_STATUS',
         lastApplied: this.state.currentGaze,
@@ -1066,27 +1043,7 @@ export class EyeHeadTrackingService {
       const isAlreadyNeutral = Math.abs(x) < 0.01 && Math.abs(y) < 0.01;
 
       if (!isAlreadyNeutral) {
-        const useAgency = this.config.useAnimationAgency ?? DEFAULT_EYE_HEAD_CONFIG.useAnimationAgency;
-        if (useAgency && this.scheduler && this.config.animationAgency) {
-          this.scheduler.resetToNeutral(duration);
-        } else if (this.config.engine) {
-          // Use transitionAU to return all axes to neutral (0)
-          // Reset both AUs in each pair to 0
-          if (this.config.eyeTrackingEnabled) {
-            this.config.engine.transitionAU?.(61, 0, duration); // Eyes left
-            this.config.engine.transitionAU?.(62, 0, duration); // Eyes right
-            this.config.engine.transitionAU?.(63, 0, duration); // Eyes up
-            this.config.engine.transitionAU?.(64, 0, duration); // Eyes down
-          }
-          if (this.config.headTrackingEnabled && this.config.headFollowEyes) {
-            this.config.engine.transitionAU?.(51, 0, duration); // Head left
-            this.config.engine.transitionAU?.(52, 0, duration); // Head right
-            this.config.engine.transitionAU?.(53, 0, duration); // Head up
-            this.config.engine.transitionAU?.(54, 0, duration); // Head down
-          }
-        }
-
-        this.state.targetGaze = { x: 0, y: 0, z: 0 };
+        this.resetToNeutral(duration);
       }
 
       this.state.returnToNeutralTimer = null;
@@ -1131,6 +1088,8 @@ export class EyeHeadTrackingService {
 
     this.eyeSnippets.clear();
     this.headSnippets.clear();
+    try { this.gazeService?.dispose(); } catch {}
+    this.gazeService = null;
     try { this.scheduler?.stop(); } catch {}
     this.scheduler = null;
     try { this.machine?.stop(); } catch {}

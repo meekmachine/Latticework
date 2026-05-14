@@ -343,19 +343,14 @@ describe('EyeHeadTrackingScheduler', () => {
       expect(scheduledSnippets.length).toBeGreaterThan(0);
     });
 
-    it('should remove and reschedule existing snippets on subsequent calls', () => {
+    it('should upsert existing snippets without explicitly removing them on subsequent calls', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0 });
       (mockHost.removeSnippet as any).mockClear();
       (mockHost.scheduleSnippet as any).mockClear();
 
       scheduler.scheduleGazeTransition({ x: -0.5, y: 0 });
 
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyePitch'
-      );
+      expect(mockHost.removeSnippet).not.toHaveBeenCalled();
       expect(mockHost.scheduleSnippet).toHaveBeenCalled();
     });
 
@@ -393,6 +388,46 @@ describe('EyeHeadTrackingScheduler', () => {
       );
       expect(mockHost.removeSnippet).toHaveBeenCalledWith(
         'eyeHeadTracking/headRoll'
+      );
+    });
+
+    it('should remove only head snippets when stopping head output', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+      (mockHost.removeSnippet as any).mockClear();
+
+      scheduler.stopHead();
+
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
+        'eyeHeadTracking/headYaw'
+      );
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
+        'eyeHeadTracking/headPitch'
+      );
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
+        'eyeHeadTracking/headRoll'
+      );
+      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(
+        'eyeHeadTracking/eyeYaw'
+      );
+      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(
+        'eyeHeadTracking/eyePitch'
+      );
+    });
+
+    it('should remove only eye snippets when stopping eye output', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+      (mockHost.removeSnippet as any).mockClear();
+
+      scheduler.stopEyes();
+
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
+        'eyeHeadTracking/eyeYaw'
+      );
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
+        'eyeHeadTracking/eyePitch'
+      );
+      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(
+        'eyeHeadTracking/headYaw'
       );
     });
   });
@@ -486,6 +521,19 @@ describe('EyeHeadTrackingScheduler', () => {
         (s) => s.name === 'eyeHeadTracking/eyeYaw'
       );
       expect(eyeYawSnippet.maxTime).toBe(0.5);
+    });
+
+    it('should reset only requested output channels', () => {
+      scheduler.resetToNeutral(500, { eyeEnabled: false, headEnabled: true });
+
+      const scheduledNames = scheduledSnippets.map((snippet) => snippet.name);
+      expect(scheduledNames).toEqual(expect.arrayContaining([
+        'eyeHeadTracking/headYaw',
+        'eyeHeadTracking/headPitch',
+        'eyeHeadTracking/headRoll',
+      ]));
+      expect(scheduledNames).not.toContain('eyeHeadTracking/eyeYaw');
+      expect(scheduledNames).not.toContain('eyeHeadTracking/eyePitch');
     });
   });
 

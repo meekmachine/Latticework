@@ -40,6 +40,17 @@ const DEFAULT_TRANSITION_CONFIG: GazeTransitionConfig = {
   headPriority: 15,
 };
 
+const EYE_SNIPPET_NAMES = [
+  'eyeHeadTracking/eyeYaw',
+  'eyeHeadTracking/eyePitch',
+] as const;
+
+const HEAD_SNIPPET_NAMES = [
+  'eyeHeadTracking/headYaw',
+  'eyeHeadTracking/headPitch',
+  'eyeHeadTracking/headRoll',
+] as const;
+
 // ARKit AU IDs for eye and head movements
 export const EYE_HEAD_AUS = {
   // Eye AUs
@@ -288,21 +299,15 @@ export class EyeHeadTrackingScheduler {
   }
 
   /**
-   * Schedule a snippet. Always schedules fresh - the mixer's crossfade handles
-   * smooth transitions from the previous value to the new target.
+   * Schedule a snippet by name. The animation service treats repeated names as
+   * an upsert, so the new inherited first keyframe is resolved from the live
+   * pose without briefly removing the channel from the mixer.
    * Returns true if the snippet is active after this call.
    */
   private upsertSnippet(snippet: any): boolean {
     const name = snippet?.name || '';
 
     try {
-      // Remove existing snippet first to ensure clean transition
-      if (this.scheduled.has(name)) {
-        this.host.removeSnippet(name);
-        this.scheduled.delete(name);
-      }
-
-      // Schedule new snippet - mixer crossfade handles the transition
       const scheduledName = this.host.scheduleSnippet(snippet) ?? name;
       if (scheduledName) {
         this.scheduled.add(scheduledName);
@@ -365,17 +370,18 @@ export class EyeHeadTrackingScheduler {
    * Stop and remove all tracking snippets
    */
   public stop(): void {
-    // Remove eye tracking snippets
-    this.host.removeSnippet('eyeHeadTracking/eyeYaw');
-    this.host.removeSnippet('eyeHeadTracking/eyePitch');
-
-    // Remove head tracking snippets
-    this.host.removeSnippet('eyeHeadTracking/headYaw');
-    this.host.removeSnippet('eyeHeadTracking/headPitch');
-    this.host.removeSnippet('eyeHeadTracking/headRoll');
-    this.scheduled.clear();
+    this.stopEyes();
+    this.stopHead();
 
     // Stopped - removed all gaze tracking snippets
+  }
+
+  public stopEyes(): void {
+    this.removeSnippets(EYE_SNIPPET_NAMES);
+  }
+
+  public stopHead(): void {
+    this.removeSnippets(HEAD_SNIPPET_NAMES);
   }
 
   public pause(): void {
@@ -403,8 +409,28 @@ export class EyeHeadTrackingScheduler {
   /**
    * Reset gaze to center (neutral position)
    */
-  public resetToNeutral(duration: number = 300): void {
-    this.scheduleGazeTransition({ x: 0, y: 0, z: 0 }, { duration });
+  public resetToNeutral(
+    duration: number = 300,
+    options?: {
+      eyeEnabled?: boolean;
+      headEnabled?: boolean;
+      headFollowEyes?: boolean;
+    }
+  ): boolean {
+    const {
+      eyeEnabled = true,
+      headEnabled = true,
+      headFollowEyes = true,
+    } = options || {};
+
+    if (!eyeEnabled && !headEnabled) {
+      return false;
+    }
+
+    return this.scheduleGazeTransition(
+      { x: 0, y: 0, z: 0 },
+      { duration, eyeEnabled, headEnabled, headFollowEyes }
+    );
   }
 
   /**
@@ -412,5 +438,12 @@ export class EyeHeadTrackingScheduler {
    */
   public dispose(): void {
     this.stop();
+  }
+
+  private removeSnippets(names: readonly string[]): void {
+    names.forEach((name) => {
+      this.host.removeSnippet(name);
+      this.scheduled.delete(name);
+    });
   }
 }
