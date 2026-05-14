@@ -51,13 +51,17 @@ export function planGazeTarget(input: GazePlanInput): GazePlan {
   };
   const delta = Math.hypot(target.x - previous.x, target.y - previous.y);
   const accepted = !!input.force || delta >= (input.config.minDelta ?? DEFAULT_GAZE_CONFIG.minDelta);
+  const baseDuration = Math.max(
+    50,
+    input.config.transitionDurationMs ?? DEFAULT_GAZE_CONFIG.transitionDurationMs
+  );
 
   return {
     rawTarget,
     target,
     accepted,
-    eyeDuration: Math.round(120 + delta * 300),
-    headDuration: Math.round(180 + delta * 400),
+    eyeDuration: Math.round(Math.max(50, baseDuration * (0.4 + delta))),
+    headDuration: Math.round(Math.max(80, baseDuration * (0.6 + delta * 4 / 3))),
   };
 }
 

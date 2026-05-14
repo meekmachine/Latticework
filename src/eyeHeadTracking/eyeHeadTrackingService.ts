@@ -179,6 +179,7 @@ export class EyeHeadTrackingService {
       headFollowEyes: this.config.headFollowEyes,
       eyeIntensity: this.config.eyeIntensity,
       headIntensity: this.config.headIntensity,
+      transitionDurationMs: this.config.agencyTransitionDuration ?? DEFAULT_EYE_HEAD_CONFIG.agencyTransitionDuration,
       runtime,
       engine: runtime ? undefined : this.config.engine,
       useTransport: false,
@@ -338,10 +339,7 @@ export class EyeHeadTrackingService {
       lastApplied: this.state.currentGaze,
     });
 
-    // Schedule return to neutral if enabled (only for manual mode)
-    if (this.trackingMode === 'manual') {
-      this.scheduleReturnToNeutral();
-    }
+    this.scheduleReturnToNeutral();
 
     this.callbacks.onGazeChange?.(target);
   }
@@ -434,6 +432,7 @@ export class EyeHeadTrackingService {
     const wasEyeTrackingEnabled = !!this.config.eyeTrackingEnabled;
     const wasHeadTrackingEnabled = !!this.config.headTrackingEnabled;
     const wasHeadFollowEyes = this.config.headFollowEyes !== false;
+    const wasReturnToNeutralEnabled = !!this.config.returnToNeutralEnabled;
     const animationAgencyChanged = Object.prototype.hasOwnProperty.call(config, 'animationAgency');
     this.config = {
       ...this.config,
@@ -450,6 +449,7 @@ export class EyeHeadTrackingService {
     const enabledHead =
       (!wasHeadTrackingEnabled && isHeadTrackingEnabled) ||
       (wasHeadTrackingEnabled && !wasHeadFollowEyes && isHeadFollowEyes);
+    const isReturnToNeutralEnabled = !!this.config.returnToNeutralEnabled;
 
     if (animationAgencyChanged) {
       this.initializeScheduler();
@@ -484,6 +484,7 @@ export class EyeHeadTrackingService {
         headFollowEyes: this.config.headFollowEyes,
         eyeIntensity: this.config.eyeIntensity,
         headIntensity: this.config.headIntensity,
+        transitionDurationMs: this.config.agencyTransitionDuration ?? DEFAULT_EYE_HEAD_CONFIG.agencyTransitionDuration,
         runtime,
         engine: runtime ? undefined : this.config.engine,
         useTransport: false,
@@ -492,6 +493,19 @@ export class EyeHeadTrackingService {
 
     if (disabledEyes || disabledHead) {
       this.clearDisabledTrackingOutputs({ eyes: disabledEyes, head: disabledHead });
+    }
+
+    if (wasReturnToNeutralEnabled && !isReturnToNeutralEnabled) {
+      this.clearReturnToNeutralTimer();
+    } else if (
+      isReturnToNeutralEnabled &&
+      (
+        !wasReturnToNeutralEnabled ||
+        config.returnToNeutralDelay !== undefined ||
+        config.returnToNeutralDuration !== undefined
+      )
+    ) {
+      this.scheduleReturnToNeutral();
     }
 
     if (
@@ -1037,7 +1051,7 @@ export class EyeHeadTrackingService {
     const delay = this.config.returnToNeutralDelay ?? 3000;
     const duration = this.config.returnToNeutralDuration ?? 800;
 
-    this.state.returnToNeutralTimer = window.setTimeout(() => {
+    this.state.returnToNeutralTimer = globalThis.setTimeout(() => {
       // Only return to neutral if we're not at neutral already
       const { x, y } = this.state.targetGaze;
       const isAlreadyNeutral = Math.abs(x) < 0.01 && Math.abs(y) < 0.01;
@@ -1047,7 +1061,7 @@ export class EyeHeadTrackingService {
       }
 
       this.state.returnToNeutralTimer = null;
-    }, delay);
+    }, delay) as unknown as number;
   }
 
   /**
@@ -1055,7 +1069,7 @@ export class EyeHeadTrackingService {
    */
   private clearReturnToNeutralTimer(): void {
     if (this.state.returnToNeutralTimer) {
-      clearTimeout(this.state.returnToNeutralTimer);
+      globalThis.clearTimeout(this.state.returnToNeutralTimer);
       this.state.returnToNeutralTimer = null;
     }
   }

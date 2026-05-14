@@ -8,6 +8,7 @@ export const DEFAULT_GAZE_CONFIG: GazeResolvedConfig = {
   mirrored: false,
   smoothFactor: 0.25,
   minDelta: 0.01,
+  transitionDurationMs: 300,
   eyeIntensity: 1.0,
   headIntensity: 0.5,
   useTransport: false,

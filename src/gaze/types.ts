@@ -80,6 +80,8 @@ export interface GazeConfig {
   smoothFactor?: number;
   /** Min delta before re-scheduling */
   minDelta?: number;
+  /** Base transition duration in milliseconds for gaze movement planning */
+  transitionDurationMs?: number;
   /** Eye intensity (0-2, default 1.0) */
   eyeIntensity?: number;
   /** Head intensity (0-2, default 0.5) */
@@ -116,6 +118,7 @@ export type GazeResolvedConfig =
     | 'mirrored'
     | 'smoothFactor'
     | 'minDelta'
+    | 'transitionDurationMs'
     | 'eyeIntensity'
     | 'headIntensity'
     | 'useTransport'
@@ -125,7 +128,8 @@ export type GazeResolvedConfig =
 export interface GazePlanInput {
   target: GazeTarget;
   previousTarget: GazeTarget;
-  config: Pick<GazeResolvedConfig, 'mirrored' | 'smoothFactor' | 'minDelta'>;
+  config: Pick<GazeResolvedConfig, 'mirrored' | 'smoothFactor' | 'minDelta'> &
+    Partial<Pick<GazeResolvedConfig, 'transitionDurationMs'>>;
   force?: boolean;
 }
 

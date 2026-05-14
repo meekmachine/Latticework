@@ -32,6 +32,10 @@ function createHarness(config: {
   headTrackingEnabled?: boolean;
   gazeMode?: 'engine' | 'legacy' | 'experimental';
   animationAgency?: any;
+  agencyTransitionDuration?: number;
+  returnToNeutralEnabled?: boolean;
+  returnToNeutralDelay?: number;
+  returnToNeutralDuration?: number;
 } = {}) {
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1, 3);
@@ -57,6 +61,10 @@ function createHarness(config: {
     eyeTrackingEnabled: config.eyeTrackingEnabled ?? true,
     headTrackingEnabled: config.headTrackingEnabled ?? true,
     headFollowEyes: true,
+    agencyTransitionDuration: config.agencyTransitionDuration,
+    returnToNeutralEnabled: config.returnToNeutralEnabled,
+    returnToNeutralDelay: config.returnToNeutralDelay,
+    returnToNeutralDuration: config.returnToNeutralDuration,
     gazeMode: config.gazeMode,
     useAnimationAgency: false,
   });
@@ -197,6 +205,96 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
     expect(headYawSnippet?.curves['52'][1].intensity).toBeCloseTo(target.x * alpha * 0.8);
 
     harness.service.dispose();
+  });
+
+  it('uses agency transition duration to plan scheduled gaze smoothness', () => {
+    const animationAgency = createAnimationAgency();
+    const harness = createHarness({
+      gazeMode: 'experimental',
+      animationAgency,
+      agencyTransitionDuration: 700,
+    });
+
+    harness.service.setGazeTarget({ x: 0.5, y: 0, z: 0 });
+
+    const scheduledSnippets = animationAgency.schedule.mock.calls.map(([snippet]) => snippet);
+    const eyeYawSnippet = scheduledSnippets.find(
+      (snippet) => snippet.name === 'eyeHeadTracking/eyeYaw'
+    );
+    const headYawSnippet = scheduledSnippets.find(
+      (snippet) => snippet.name === 'eyeHeadTracking/headYaw'
+    );
+
+    expect(eyeYawSnippet?.maxTime).toBeGreaterThan(0.35);
+    expect(headYawSnippet?.maxTime).toBeGreaterThan(eyeYawSnippet?.maxTime ?? 0);
+
+    harness.service.dispose();
+  });
+
+  it('schedules return to neutral when the feature is enabled after a gaze target is active', () => {
+    vi.useFakeTimers();
+    const animationAgency = createAnimationAgency();
+    const harness = createHarness({
+      gazeMode: 'experimental',
+      animationAgency,
+      returnToNeutralDelay: 100,
+      returnToNeutralDuration: 700,
+    });
+
+    try {
+      harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
+      animationAgency.schedule.mockClear();
+
+      harness.service.updateConfig({ returnToNeutralEnabled: true });
+      vi.advanceTimersByTime(99);
+      expect(animationAgency.schedule).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+
+      const scheduledSnippets = animationAgency.schedule.mock.calls.map(([snippet]) => snippet);
+      const resetEyeYaw = scheduledSnippets.find(
+        (snippet) => snippet.name === 'eyeHeadTracking/eyeYaw'
+      );
+      const resetHeadYaw = scheduledSnippets.find(
+        (snippet) => snippet.name === 'eyeHeadTracking/headYaw'
+      );
+
+      expect(resetEyeYaw?.maxTime).toBeCloseTo(0.7);
+      expect(resetHeadYaw?.maxTime).toBeCloseTo(0.7);
+      expect(harness.service.getState().targetGaze).toEqual({ x: 0, y: 0, z: 0 });
+    } finally {
+      harness.service.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('auto-returns after quiet tracking input outside manual mode', () => {
+    vi.useFakeTimers();
+    const animationAgency = createAnimationAgency();
+    const harness = createHarness({
+      gazeMode: 'experimental',
+      animationAgency,
+      returnToNeutralEnabled: true,
+      returnToNeutralDelay: 100,
+      returnToNeutralDuration: 500,
+    });
+
+    try {
+      (harness.service as any).trackingMode = 'mouse';
+      harness.service.setGazeTarget({ x: 0.35, y: 0.1, z: 0 });
+      animationAgency.schedule.mockClear();
+
+      vi.advanceTimersByTime(100);
+
+      const resetNames = animationAgency.schedule.mock.calls.map(([snippet]) => snippet.name);
+      expect(resetNames).toEqual(expect.arrayContaining([
+        'eyeHeadTracking/eyeYaw',
+        'eyeHeadTracking/headYaw',
+      ]));
+    } finally {
+      harness.service.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('clears active head output when head tracking is disabled', () => {
