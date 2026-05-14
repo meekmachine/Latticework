@@ -259,22 +259,24 @@ function buildClipCurves(
   loopMode: 'once' | 'repeat' | 'pingpong',
   host?: Engine,
 ) {
-  const clipCurves: Record<string, Array<{ time: number; intensity: number }>> = {};
+  const clipCurves: Record<string, SchedulerCurvePoint[]> = {};
 
   const applyInherit = (
     curveId: string,
     arr: Array<{ time: number; intensity: number; inherit?: boolean }>,
   ) => {
-    const baseCurve = arr.map(({ time, intensity }) => ({ time, intensity }));
+    const baseCurve = arr.map(({ time, intensity, inherit }) => (
+      inherit ? { time, intensity, inherit: true } : { time, intensity }
+    ));
     if (!arr.length) return baseCurve;
     const first = arr[0];
 
     if (sn.snippetCategory === 'eyeHeadTracking') {
       if (first?.inherit) {
-        const base = getCurrentValue(curveId);
-        const next = baseCurve.slice();
-        next[0] = { ...next[0], intensity: base };
-        return next;
+        // Eye/head curves must reach Loom3 with the inherited start marker intact.
+        // Loom3 resolves that first frame from the live morph/bone pose, while
+        // the old AU-only fallback cannot see clip-driven head rotations.
+        return baseCurve;
       }
       if (loopMode !== 'once' && baseCurve.length > 1) {
         const firstIntensity = baseCurve[0].intensity;

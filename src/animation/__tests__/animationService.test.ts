@@ -28,7 +28,7 @@ describe('AnimationService', () => {
   let mockHost: Partial<Engine>;
   let builtClips: Array<{
     name: string;
-    curves: Record<string, Array<{ time: number; intensity: number }>>;
+    curves: Record<string, Array<{ time: number; intensity: number; inherit?: boolean }>>;
     options: any;
     handle: any;
   }>;
@@ -78,7 +78,7 @@ describe('AnimationService', () => {
 
     const mockClipHandle = (
       name: string,
-      curves: Record<string, Array<{ time: number; intensity: number }>>
+      curves: Record<string, Array<{ time: number; intensity: number; inherit?: boolean }>>
     ) => {
       const duration = Math.max(
         0,
@@ -638,6 +638,37 @@ describe('AnimationService', () => {
       });
       expect(builtClips[0].handle.play).toHaveBeenCalled();
       expect(mockHost.onSnippetEnd as any).toHaveBeenCalledWith('test_playback');
+    });
+
+    it('preserves inherited eye/head first frames for Loom3 live-pose anchoring', async () => {
+      (mockHost.getAU as any).mockReturnValue(0.65);
+
+      service.schedule({
+        name: 'eyeHeadTracking/eyeYaw',
+        snippetCategory: 'eyeHeadTracking',
+        curves: {
+          '61': [
+            { time: 0, intensity: 0, inherit: true },
+            { time: 0.3, intensity: 0 },
+          ],
+          '62': [
+            { time: 0, intensity: 0, inherit: true },
+            { time: 0.3, intensity: 0.4 },
+          ],
+        },
+      });
+      service.play();
+
+      await vi.runAllTimersAsync();
+
+      expect(builtClips).toHaveLength(1);
+      expect(builtClips[0].curves['61'][0]).toEqual({ time: 0, intensity: 0, inherit: true });
+      expect(builtClips[0].curves['62'][0]).toEqual({ time: 0, intensity: 0, inherit: true });
+      expect(mockHost.getAU as any).not.toHaveBeenCalledWith(61);
+      expect(mockHost.getAU as any).not.toHaveBeenCalledWith(62);
+      expect(builtClips[0].options).toMatchObject({
+        loopMode: 'once',
+      });
     });
 
     it('preserves explicit viseme jaw overrides when building clips', async () => {
