@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   EyeHeadTrackingScheduler,
   EyeHeadHostCaps,
@@ -6,12 +6,28 @@ import {
   GazeTransitionConfig,
 } from '../eyeHeadTrackingScheduler';
 
+const EYE_YAW = 'eyeHeadTracking/eyeYaw';
+const EYE_PITCH = 'eyeHeadTracking/eyePitch';
+const HEAD_YAW = 'eyeHeadTracking/headYaw';
+const HEAD_PITCH = 'eyeHeadTracking/headPitch';
+const HEAD_ROLL = 'eyeHeadTracking/headRoll';
+
 describe('EyeHeadTrackingScheduler', () => {
   let scheduler: EyeHeadTrackingScheduler;
   let mockHost: EyeHeadHostCaps;
   let scheduledSnippets: any[];
 
+  const getSnippet = (name: string) => scheduledSnippets.find((snippet) => snippet.name === name);
+  const clearHostMocks = () => {
+    for (const value of Object.values(mockHost)) {
+      if (typeof value === 'function' && 'mockClear' in value) {
+        (value as any).mockClear();
+      }
+    }
+  };
+
   beforeEach(() => {
+    vi.useFakeTimers();
     scheduledSnippets = [];
 
     mockHost = {
@@ -24,10 +40,19 @@ describe('EyeHeadTrackingScheduler', () => {
       pauseSnippet: vi.fn(),
       resumeSnippet: vi.fn(),
       restartSnippet: vi.fn(),
+      setSnippetPlaybackRate: vi.fn(),
+      setSnippetIntensityScale: vi.fn(),
+      setSnippetReverse: vi.fn(),
       removeSnippet: vi.fn(),
     };
 
     scheduler = new EyeHeadTrackingScheduler(mockHost);
+  });
+
+  afterEach(() => {
+    scheduler.dispose();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   describe('EYE_HEAD_AUS constants', () => {
@@ -48,324 +73,219 @@ describe('EyeHeadTrackingScheduler', () => {
     });
   });
 
-  describe('constructor', () => {
-    it('should use default config when none provided', () => {
-      const s = new EyeHeadTrackingScheduler(mockHost);
-      // Test defaults by scheduling and checking snippet properties
-      s.scheduleGazeTransition({ x: 0.5, y: 0 });
-      expect(scheduledSnippets.length).toBeGreaterThan(0);
+  describe('constructor and config', () => {
+    it('should schedule stable normalized control clips', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+
+      const eyeYawSnippet = getSnippet(EYE_YAW);
+      expect(eyeYawSnippet).toMatchObject({
+        name: EYE_YAW,
+        maxTime: 1,
+        currentTime: 0.5,
+        loop: false,
+        mixerClampWhenFinished: true,
+        snippetCategory: 'eyeHeadTracking',
+        snippetPlaybackRate: 1,
+        snippetIntensityScale: 1,
+      });
+      expect(eyeYawSnippet.curves['61']).toEqual([
+        { time: 0, intensity: 1 },
+        { time: 0.5, intensity: 0 },
+        { time: 1, intensity: 0 },
+      ]);
+      expect(eyeYawSnippet.curves['62']).toEqual([
+        { time: 0, intensity: 0 },
+        { time: 0.5, intensity: 0 },
+        { time: 1, intensity: 1 },
+      ]);
     });
 
-    it('should merge provided config with defaults', () => {
+    it('should apply custom duration as playback speed, not clip length', () => {
       const customConfig: Partial<GazeTransitionConfig> = {
         duration: 500,
         eyeIntensity: 2.0,
       };
-      const s = new EyeHeadTrackingScheduler(mockHost, customConfig);
+      scheduler = new EyeHeadTrackingScheduler(mockHost, customConfig);
 
-      s.scheduleGazeTransition({ x: 1, y: 0 });
+      scheduler.scheduleGazeTransition({ x: 1, y: 0 }, { headEnabled: false });
 
-      // Check that the duration was applied (0.5 seconds)
-      const eyeYawSnippet = scheduledSnippets.find(
-        (s) => s.name === 'eyeHeadTracking/eyeYaw'
-      );
-      expect(eyeYawSnippet).toBeDefined();
-      expect(eyeYawSnippet.maxTime).toBe(0.5); // 500ms = 0.5s
+      expect(getSnippet(EYE_YAW).maxTime).toBe(1);
+      expect(mockHost.setSnippetIntensityScale).toHaveBeenCalledWith(EYE_YAW, 2);
+      expect(mockHost.setSnippetPlaybackRate).toHaveBeenCalledWith(EYE_YAW, 1);
     });
-  });
 
-  describe('updateConfig', () => {
-    it('should update config values', () => {
+    it('should update config values for later live controls', () => {
       scheduler.updateConfig({ duration: 600, headIntensity: 1.5 });
 
-      scheduler.scheduleGazeTransition({ x: 0, y: 0.5 });
+      scheduler.scheduleGazeTransition({ x: 1, y: 0 }, { eyeEnabled: false });
 
-      const headPitchSnippet = scheduledSnippets.find(
-        (s) => s.name === 'eyeHeadTracking/headPitch'
-      );
-      expect(headPitchSnippet).toBeDefined();
-      expect(headPitchSnippet.maxTime).toBe(0.6); // 600ms = 0.6s
+      expect(getSnippet(HEAD_YAW).maxTime).toBe(1);
+      expect(mockHost.setSnippetIntensityScale).toHaveBeenCalledWith(HEAD_YAW, 1.5);
+      expect(mockHost.setSnippetPlaybackRate).toHaveBeenCalledWith(HEAD_YAW, 0.5 / 0.6);
     });
   });
 
   describe('scheduleGazeTransition', () => {
-    describe('eye movements', () => {
-      it('should schedule eye yaw and pitch snippets', () => {
-        scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+    it('should schedule eye yaw and pitch snippets', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 }, { headEnabled: false });
 
-        const names = scheduledSnippets.map((s) => s.name);
-        expect(names).toContain('eyeHeadTracking/eyeYaw');
-        expect(names).toContain('eyeHeadTracking/eyePitch');
-      });
-
-      it('should use correct AU IDs for positive eye yaw (look right)', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0 },
-          { headEnabled: false }
-        );
-
-        const eyeYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyeYaw'
-        );
-        expect(eyeYawSnippet).toBeDefined();
-        expect(eyeYawSnippet.curves).toBeDefined();
-
-        // Positive x = look right = AU 62 should have value, AU 61 should be 0
-        expect(eyeYawSnippet.curves['62']).toBeDefined();
-        expect(eyeYawSnippet.curves['61']).toBeDefined();
-
-        // AU 62 (right) should have intensity at the end
-        const rightCurve = eyeYawSnippet.curves['62'];
-        expect(rightCurve[rightCurve.length - 1].intensity).toBeGreaterThan(0);
-
-        // AU 61 (left) should be 0 at end
-        const leftCurve = eyeYawSnippet.curves['61'];
-        expect(leftCurve[leftCurve.length - 1].intensity).toBe(0);
-      });
-
-      it('should use correct AU IDs for negative eye yaw (look left)', () => {
-        scheduler.scheduleGazeTransition(
-          { x: -0.5, y: 0 },
-          { headEnabled: false }
-        );
-
-        const eyeYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyeYaw'
-        );
-        expect(eyeYawSnippet).toBeDefined();
-
-        // Negative x = look left = AU 61 should have value
-        const leftCurve = eyeYawSnippet.curves['61'];
-        expect(leftCurve[leftCurve.length - 1].intensity).toBeGreaterThan(0);
-
-        // AU 62 (right) should be 0
-        const rightCurve = eyeYawSnippet.curves['62'];
-        expect(rightCurve[rightCurve.length - 1].intensity).toBe(0);
-      });
-
-      it('should use correct AU IDs for positive eye pitch (look up)', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0, y: 0.5 },
-          { headEnabled: false }
-        );
-
-        const eyePitchSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyePitch'
-        );
-        expect(eyePitchSnippet).toBeDefined();
-
-        // Positive y = look up = AU 63 should have value
-        const upCurve = eyePitchSnippet.curves['63'];
-        expect(upCurve[upCurve.length - 1].intensity).toBeGreaterThan(0);
-
-        // AU 64 (down) should be 0
-        const downCurve = eyePitchSnippet.curves['64'];
-        expect(downCurve[downCurve.length - 1].intensity).toBe(0);
-      });
-
-      it('should disable eye movement when eyeEnabled is false', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0.5 },
-          { eyeEnabled: false }
-        );
-
-        const eyeSnippets = scheduledSnippets.filter(
-          (s) =>
-            s.name === 'eyeHeadTracking/eyeYaw' ||
-            s.name === 'eyeHeadTracking/eyePitch'
-        );
-        expect(eyeSnippets.length).toBe(0);
-      });
+      const names = scheduledSnippets.map((snippet) => snippet.name);
+      expect(names).toEqual([EYE_YAW, EYE_PITCH]);
     });
 
-    describe('head movements', () => {
-      it('should schedule head yaw, pitch, and roll snippets', () => {
-        scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+    it('should schedule head yaw, pitch, and roll snippets', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 }, { eyeEnabled: false });
 
-        const names = scheduledSnippets.map((s) => s.name);
-        expect(names).toContain('eyeHeadTracking/headYaw');
-        expect(names).toContain('eyeHeadTracking/headPitch');
-        expect(names).toContain('eyeHeadTracking/headRoll');
-      });
-
-      it('should use correct AU IDs for positive head yaw (turn right)', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0 },
-          { eyeEnabled: false }
-        );
-
-        const headYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/headYaw'
-        );
-        expect(headYawSnippet).toBeDefined();
-
-        // Positive x = turn right = AU 52 should have value
-        const rightCurve = headYawSnippet.curves['52'];
-        expect(rightCurve[rightCurve.length - 1].intensity).toBeGreaterThan(0);
-
-        // AU 51 (left) should be 0
-        const leftCurve = headYawSnippet.curves['51'];
-        expect(leftCurve[leftCurve.length - 1].intensity).toBe(0);
-      });
-
-      it('should schedule head roll when headRoll option is provided', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0, y: 0 },
-          { eyeEnabled: false, headRoll: 0.5 }
-        );
-
-        const headRollSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/headRoll'
-        );
-        expect(headRollSnippet).toBeDefined();
-
-        // Positive roll = tilt right = AU 56 should have value
-        const rightCurve = headRollSnippet.curves['56'];
-        expect(rightCurve[rightCurve.length - 1].intensity).toBeGreaterThan(0);
-      });
-
-      it('should disable head movement when headEnabled is false', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0.5 },
-          { headEnabled: false }
-        );
-
-        const headSnippets = scheduledSnippets.filter((s) =>
-          s.name.includes('head')
-        );
-        expect(headSnippets.length).toBe(0);
-      });
-
-      it('should disable head movement when headFollowEyes is false', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0.5 },
-          { headFollowEyes: false }
-        );
-
-        const headSnippets = scheduledSnippets.filter((s) =>
-          s.name.includes('head')
-        );
-        expect(headSnippets.length).toBe(0);
-      });
+      const names = scheduledSnippets.map((snippet) => snippet.name);
+      expect(names).toEqual([HEAD_YAW, HEAD_PITCH, HEAD_ROLL]);
     });
 
-    describe('snippet properties', () => {
-      it('should set correct snippet category', () => {
-        scheduler.scheduleGazeTransition({ x: 0.5, y: 0 });
+    it('should disable eye movement when eyeEnabled is false', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.5 }, { eyeEnabled: false });
 
-        for (const snippet of scheduledSnippets) {
-          expect(snippet.snippetCategory).toBe('eyeHeadTracking');
-        }
-      });
-
-      it('should set loop to false', () => {
-        scheduler.scheduleGazeTransition({ x: 0.5, y: 0 });
-
-        for (const snippet of scheduledSnippets) {
-          expect(snippet.loop).toBe(false);
-        }
-      });
-
-      it('should respect custom duration option', () => {
-        scheduler.scheduleGazeTransition({ x: 0.5, y: 0 }, { duration: 400 });
-
-        const eyeYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyeYaw'
-        );
-        expect(eyeYawSnippet.maxTime).toBe(0.4); // 400ms = 0.4s
-      });
-
-      it('should support separate eye and head durations', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0 },
-          { eyeDuration: 200, headDuration: 500 }
-        );
-
-        const eyeYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyeYaw'
-        );
-        const headYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/headYaw'
-        );
-
-        expect(eyeYawSnippet.maxTime).toBe(0.2);
-        expect(headYawSnippet.maxTime).toBe(0.5);
-      });
+      const names = scheduledSnippets.map((snippet) => snippet.name);
+      expect(names).not.toContain(EYE_YAW);
+      expect(names).not.toContain(EYE_PITCH);
     });
 
-    describe('curve structure', () => {
-      it('should animate from the current pose to the target over the requested duration', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0 },
-          { headEnabled: false }
-        );
+    it('should disable head movement when headEnabled is false', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.5 }, { headEnabled: false });
 
-        const eyeYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyeYaw'
-        );
+      const names = scheduledSnippets.map((snippet) => snippet.name);
+      expect(names).not.toContain(HEAD_YAW);
+      expect(names).not.toContain(HEAD_PITCH);
+      expect(names).not.toContain(HEAD_ROLL);
+    });
 
-        expect(eyeYawSnippet.curves['61'].length).toBe(2);
-        expect(eyeYawSnippet.curves['62'].length).toBe(2);
-        expect(eyeYawSnippet.curves['61'][0].time).toBe(0);
-        expect(eyeYawSnippet.curves['61'][0].intensity).toBe(0);
-        expect(eyeYawSnippet.curves['61'][0].inherit).toBe(true);
-        expect(eyeYawSnippet.curves['62'][0].time).toBe(0);
-        expect(eyeYawSnippet.curves['62'][0].intensity).toBe(0);
-        expect(eyeYawSnippet.curves['62'][0].inherit).toBe(true);
-        expect(eyeYawSnippet.curves['61'][1].time).toBe(0.2);
-        expect(eyeYawSnippet.curves['61'][1].intensity).toBe(0);
-        expect(eyeYawSnippet.curves['62'][1].time).toBe(0.2);
-        expect(eyeYawSnippet.curves['62'][1].intensity).toBe(0.5);
-      });
+    it('should disable head movement when headFollowEyes is false', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.5 }, { headFollowEyes: false });
 
-      it('should always schedule BOTH directions for proper transitions', () => {
-        scheduler.scheduleGazeTransition(
-          { x: 0.5, y: 0 },
-          { headEnabled: false }
-        );
+      const names = scheduledSnippets.map((snippet) => snippet.name);
+      expect(names).not.toContain(HEAD_YAW);
+      expect(names).not.toContain(HEAD_PITCH);
+      expect(names).not.toContain(HEAD_ROLL);
+    });
 
-        const eyeYawSnippet = scheduledSnippets.find(
-          (s) => s.name === 'eyeHeadTracking/eyeYaw'
-        );
+    it('should drive positive eye yaw forward toward the positive AU', () => {
+      scheduler.scheduleGazeTransition(
+        { x: 0.5, y: 0 },
+        { headEnabled: false, duration: 400 }
+      );
 
-        // Both AU 61 and 62 should be present in curves
-        expect(eyeYawSnippet.curves['61']).toBeDefined();
-        expect(eyeYawSnippet.curves['62']).toBeDefined();
-      });
+      expect(getSnippet(EYE_YAW).curves['62'][2].intensity).toBe(1);
+      expect(mockHost.setSnippetReverse).toHaveBeenCalledWith(EYE_YAW, false);
+      expect(mockHost.setSnippetPlaybackRate).toHaveBeenCalledWith(EYE_YAW, 0.25 / 0.4);
+
+      vi.advanceTimersByTime(400);
+
+      expect(mockHost.seekSnippet).toHaveBeenCalledWith(EYE_YAW, 0.75);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(EYE_YAW);
+    });
+
+    it('should drive negative eye yaw in reverse toward the negative AU', () => {
+      scheduler.scheduleGazeTransition(
+        { x: -0.5, y: 0 },
+        { headEnabled: false, duration: 400 }
+      );
+
+      expect(getSnippet(EYE_YAW).curves['61'][0].intensity).toBe(1);
+      expect(mockHost.setSnippetReverse).toHaveBeenCalledWith(EYE_YAW, true);
+      expect(mockHost.setSnippetPlaybackRate).toHaveBeenCalledWith(EYE_YAW, 0.25 / 0.4);
+
+      vi.advanceTimersByTime(400);
+
+      expect(mockHost.seekSnippet).toHaveBeenCalledWith(EYE_YAW, 0.25);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(EYE_YAW);
+    });
+
+    it('should map positive pitch to the positive pitch AU endpoint', () => {
+      scheduler.scheduleGazeTransition(
+        { x: 0, y: 1 },
+        { headEnabled: false, duration: 500 }
+      );
+
+      expect(getSnippet(EYE_PITCH).curves['63'][2].intensity).toBe(1);
+      expect(mockHost.setSnippetReverse).toHaveBeenCalledWith(EYE_PITCH, false);
+
+      vi.advanceTimersByTime(500);
+
+      expect(mockHost.seekSnippet).toHaveBeenCalledWith(EYE_PITCH, 1);
+    });
+
+    it('should schedule head roll when headRoll option is provided', () => {
+      scheduler.scheduleGazeTransition(
+        { x: 0, y: 0 },
+        { eyeEnabled: false, headRoll: 0.5 }
+      );
+
+      expect(getSnippet(HEAD_ROLL)).toBeDefined();
+      expect(mockHost.setSnippetReverse).toHaveBeenCalledWith(HEAD_ROLL, false);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(HEAD_ROLL);
     });
   });
 
-  describe('upsertSnippet behavior', () => {
-    it('should schedule new snippet on first call', () => {
+  describe('persistent axis control', () => {
+    it('should not schedule replacement snippets on subsequent gaze updates', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0 });
-
-      expect(mockHost.scheduleSnippet).toHaveBeenCalled();
-      expect(scheduledSnippets.length).toBeGreaterThan(0);
-    });
-
-    it('should upsert existing snippets without explicitly removing them on subsequent calls', () => {
-      scheduler.scheduleGazeTransition({ x: 0.5, y: 0 });
-      (mockHost.removeSnippet as any).mockClear();
-      (mockHost.scheduleSnippet as any).mockClear();
+      clearHostMocks();
 
       scheduler.scheduleGazeTransition({ x: -0.5, y: 0 });
 
+      expect(mockHost.scheduleSnippet).not.toHaveBeenCalled();
       expect(mockHost.removeSnippet).not.toHaveBeenCalled();
-      expect(mockHost.scheduleSnippet).toHaveBeenCalled();
+      expect(mockHost.setSnippetReverse).toHaveBeenCalledWith(EYE_YAW, true);
+      expect(mockHost.setSnippetPlaybackRate).toHaveBeenCalledWith(EYE_YAW, 0.25 / 0.2);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(EYE_YAW);
     });
 
-    it('should resume freshly scheduled snippets after rescheduling', () => {
-      scheduler.scheduleGazeTransition({ x: 0.5, y: 0 });
-      (mockHost.resumeSnippet as any).mockClear();
+    it('should update mixer weight without rebuilding the clip', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0 }, { headEnabled: false });
+      clearHostMocks();
+      scheduler.updateConfig({ eyeIntensity: 0.4 });
 
-      scheduler.scheduleGazeTransition({ x: -0.5, y: 0 });
+      scheduler.scheduleGazeTransition({ x: 0.25, y: 0 }, { headEnabled: false });
 
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
+      expect(mockHost.scheduleSnippet).not.toHaveBeenCalled();
+      expect(mockHost.setSnippetIntensityScale).toHaveBeenCalledWith(EYE_YAW, 0.4);
+      expect(mockHost.setSnippetIntensityScale).toHaveBeenCalledWith(EYE_PITCH, 0.4);
+    });
+
+    it('should seek and pause immediately when already at the requested value', () => {
+      scheduler.scheduleGazeTransition({ x: 0, y: 0 }, { headEnabled: false });
+
+      expect(mockHost.seekSnippet).toHaveBeenCalledWith(EYE_YAW, 0.5);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(EYE_YAW);
+      expect(mockHost.resumeSnippet).not.toHaveBeenCalledWith(EYE_YAW);
+    });
+  });
+
+  describe('resetToNeutral', () => {
+    it('should return the existing eye yaw action to center', () => {
+      scheduler.scheduleGazeTransition(
+        { x: 1, y: 0 },
+        { headEnabled: false, duration: 200 }
       );
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headYaw'
-      );
+      vi.advanceTimersByTime(200);
+      clearHostMocks();
+
+      scheduler.resetToNeutral(500, { headEnabled: false });
+
+      expect(mockHost.scheduleSnippet).not.toHaveBeenCalled();
+      expect(mockHost.setSnippetReverse).toHaveBeenCalledWith(EYE_YAW, true);
+      expect(mockHost.setSnippetPlaybackRate).toHaveBeenCalledWith(EYE_YAW, 1);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(EYE_YAW);
+
+      vi.advanceTimersByTime(500);
+
+      expect(mockHost.seekSnippet).toHaveBeenCalledWith(EYE_YAW, 0.5);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(EYE_YAW);
+    });
+
+    it('should reset only requested output channels', () => {
+      scheduler.resetToNeutral(500, { eyeEnabled: false, headEnabled: true });
+
+      const scheduledNames = scheduledSnippets.map((snippet) => snippet.name);
+      expect(scheduledNames).toEqual([HEAD_YAW, HEAD_PITCH, HEAD_ROLL]);
     });
   });
 
@@ -374,84 +294,63 @@ describe('EyeHeadTrackingScheduler', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
       scheduler.stop();
 
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyePitch'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headYaw'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headPitch'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headRoll'
-      );
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(EYE_YAW);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(EYE_PITCH);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(HEAD_YAW);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(HEAD_PITCH);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(HEAD_ROLL);
     });
 
     it('should remove only head snippets when stopping head output', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
-      (mockHost.removeSnippet as any).mockClear();
+      clearHostMocks();
 
       scheduler.stopHead();
 
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headYaw'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headPitch'
-      );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headRoll'
-      );
-      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
-      );
-      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(
-        'eyeHeadTracking/eyePitch'
-      );
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(HEAD_YAW);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(HEAD_PITCH);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(HEAD_ROLL);
+      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(EYE_YAW);
+      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(EYE_PITCH);
     });
 
     it('should remove only eye snippets when stopping eye output', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
-      (mockHost.removeSnippet as any).mockClear();
+      clearHostMocks();
 
       scheduler.stopEyes();
 
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(EYE_YAW);
+      expect(mockHost.removeSnippet).toHaveBeenCalledWith(EYE_PITCH);
+      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(HEAD_YAW);
+    });
+
+    it('should cancel in-flight timers for removed head snippets', () => {
+      scheduler.scheduleGazeTransition({ x: 1, y: 1 }, { duration: 500 });
+      scheduler.stopHead();
+      clearHostMocks();
+
+      vi.advanceTimersByTime(500);
+
+      const headSeekCalls = (mockHost.seekSnippet as any).mock.calls.filter(([name]: [string]) =>
+        name === HEAD_YAW || name === HEAD_PITCH || name === HEAD_ROLL
       );
-      expect(mockHost.removeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyePitch'
-      );
-      expect(mockHost.removeSnippet).not.toHaveBeenCalledWith(
-        'eyeHeadTracking/headYaw'
-      );
+      expect(headSeekCalls).toEqual([]);
     });
   });
 
-  describe('pause', () => {
+  describe('pause and resume', () => {
     it('should pause all tracking snippets when pauseSnippet is available', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+      clearHostMocks();
+
       scheduler.pause();
 
-      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
-      );
-      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyePitch'
-      );
-      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headYaw'
-      );
-      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headPitch'
-      );
-      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headRoll'
-      );
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(EYE_YAW);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(EYE_PITCH);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(HEAD_YAW);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(HEAD_PITCH);
+      expect(mockHost.pauseSnippet).toHaveBeenCalledWith(HEAD_ROLL);
     });
 
     it('should call stop when pauseSnippet is not available', () => {
@@ -459,81 +358,25 @@ describe('EyeHeadTrackingScheduler', () => {
         scheduleSnippet: mockHost.scheduleSnippet,
         removeSnippet: mockHost.removeSnippet,
       };
-      const s = new EyeHeadTrackingScheduler(hostWithoutPause);
+      scheduler = new EyeHeadTrackingScheduler(hostWithoutPause);
 
-      s.scheduleGazeTransition({ x: 0.5, y: 0.3 });
-      s.pause();
-
-      // Should have called removeSnippet instead
-      expect(hostWithoutPause.removeSnippet).toHaveBeenCalled();
-    });
-  });
-
-  describe('resume', () => {
-    it('should resume all tracking snippets', () => {
       scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
       scheduler.pause();
+
+      expect(hostWithoutPause.removeSnippet).toHaveBeenCalled();
+    });
+
+    it('should resume all tracking snippets when requested', () => {
+      scheduler.scheduleGazeTransition({ x: 0.5, y: 0.3 });
+      clearHostMocks();
+
       scheduler.resume();
 
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyeYaw'
-      );
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/eyePitch'
-      );
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headYaw'
-      );
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headPitch'
-      );
-      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(
-        'eyeHeadTracking/headRoll'
-      );
-    });
-  });
-
-  describe('resetToNeutral', () => {
-    it('should schedule transition to center position', () => {
-      scheduler.resetToNeutral();
-
-      // Should schedule eye and head movements to (0, 0)
-      const eyeYawSnippet = scheduledSnippets.find(
-        (s) => s.name === 'eyeHeadTracking/eyeYaw'
-      );
-      expect(eyeYawSnippet).toBeDefined();
-
-      // Both directions should end at 0
-      expect(
-        eyeYawSnippet.curves['61'][eyeYawSnippet.curves['61'].length - 1]
-          .intensity
-      ).toBe(0);
-      expect(
-        eyeYawSnippet.curves['62'][eyeYawSnippet.curves['62'].length - 1]
-          .intensity
-      ).toBe(0);
-    });
-
-    it('should use provided duration', () => {
-      scheduler.resetToNeutral(500);
-
-      const eyeYawSnippet = scheduledSnippets.find(
-        (s) => s.name === 'eyeHeadTracking/eyeYaw'
-      );
-      expect(eyeYawSnippet.maxTime).toBe(0.5);
-    });
-
-    it('should reset only requested output channels', () => {
-      scheduler.resetToNeutral(500, { eyeEnabled: false, headEnabled: true });
-
-      const scheduledNames = scheduledSnippets.map((snippet) => snippet.name);
-      expect(scheduledNames).toEqual(expect.arrayContaining([
-        'eyeHeadTracking/headYaw',
-        'eyeHeadTracking/headPitch',
-        'eyeHeadTracking/headRoll',
-      ]));
-      expect(scheduledNames).not.toContain('eyeHeadTracking/eyeYaw');
-      expect(scheduledNames).not.toContain('eyeHeadTracking/eyePitch');
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(EYE_YAW);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(EYE_PITCH);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(HEAD_YAW);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(HEAD_PITCH);
+      expect(mockHost.resumeSnippet).toHaveBeenCalledWith(HEAD_ROLL);
     });
   });
 

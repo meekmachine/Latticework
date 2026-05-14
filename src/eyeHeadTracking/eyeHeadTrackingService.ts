@@ -138,7 +138,11 @@ export class EyeHeadTrackingService {
         return agency.updateSnippet?.(snippet) ?? null;
       },
       seekSnippet: (name: string, offsetSec: number) => {
-        agency.seek?.(name, offsetSec);
+        if (typeof agency.setSnippetTime === 'function') {
+          agency.setSnippetTime(name, offsetSec);
+        } else {
+          agency.seek?.(name, offsetSec);
+        }
       },
       pauseSnippet: (name: string) => {
         agency.pauseSnippet?.(name);
@@ -150,6 +154,15 @@ export class EyeHeadTrackingService {
       restartSnippet: (name: string) => {
         ensureAgencyPlaying();
         agency.restartSnippet?.(name);
+      },
+      setSnippetPlaybackRate: (name: string, rate: number) => {
+        agency.setSnippetPlaybackRate?.(name, rate);
+      },
+      setSnippetIntensityScale: (name: string, scale: number) => {
+        agency.setSnippetIntensityScale?.(name, scale);
+      },
+      setSnippetReverse: (name: string, reverse: boolean) => {
+        agency.setSnippetReverse?.(name, reverse);
       },
       removeSnippet: (name: string) => {
         agency.remove?.(name);
