@@ -68,10 +68,13 @@ jobs:
 
       - name: Determine release version
         id: release
-        run: node scripts/ci/determine-release-version.mjs
+        run: npm run release:determine-version
 
       - name: Build
         run: npm run build
+
+      - name: Verify TypeScript-only source
+        run: npm run check:typescript-only
 
       - name: Run typecheck
         run: npm run typecheck
@@ -93,7 +96,7 @@ jobs:
       - name: Ensure release tag exists
         env:
           TAG: ${{ steps.release.outputs.tag }}
-        run: bash scripts/ci/create-release-tag.sh --tag "${TAG}" --commit HEAD --push
+        run: npm run release:ensure-tag -- --tag "${TAG}" --commit HEAD --push
 
       - name: Publish to NPM
         if: steps.existing.outputs.exists != 'true'
@@ -108,7 +111,7 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          bash scripts/ci/upsert-github-release.sh \
+          npm run release:upsert-github -- \
             --tag "${TAG}" \
             --commit "${GITHUB_SHA}" \
             --package-name "${{ steps.release.outputs.package_name }}" \

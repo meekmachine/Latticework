@@ -27,6 +27,8 @@ jobs:
         check:
           - name: Build
             command: npm run build
+          - name: TypeScript-only
+            command: npm run check:typescript-only
           - name: Typecheck
             command: npm run typecheck
           - name: Test
@@ -47,4 +49,3 @@ jobs:
 
       - name: Run ${{ matrix.check.name }}
         run: ${{ matrix.check.command }}
-

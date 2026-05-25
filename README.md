@@ -179,9 +179,11 @@ npm run typecheck
 npm test
 ```
 
-The build emits ESM, CJS, and type declarations through `tsup`. The build also
-copies bundled animation snippets into `dist` so consumers can preload them from
-the package.
+The repo-owned runtime and automation code is TypeScript. The build emits ESM,
+CJS, and type declarations through `tsup`, then runs a TypeScript helper to copy
+bundled animation snippets into `dist` so consumers can preload them from the
+package. PR checks include `npm run check:typescript-only` to keep JavaScript and
+shell source out of the repository.
 
 ## Release Flow
 
@@ -191,12 +193,12 @@ actual release version from an existing `vX.Y.Z` tag or from the latest npm
 version, then bumps the patch version in the CI workspace before publishing.
 
 1. Open a PR against `main`.
-2. PR checks run build, typecheck, and tests.
+2. PR checks run build, TypeScript-only validation, typecheck, and tests.
 3. Merge to `main`.
 4. The `Publish to NPM` workflow determines the next patch version with
-   `scripts/ci/determine-release-version.mjs`, creates or reuses a `vX.Y.Z`
-   tag, builds, tests, and publishes if that npm version does not already
-   exist.
+   `scripts/ci/determine-release-version.ts`, creates or reuses a `vX.Y.Z`
+   tag, builds, validates the TypeScript-only boundary, tests, and publishes if
+   that npm version does not already exist.
 5. Verify the published package.
 
 ```bash
