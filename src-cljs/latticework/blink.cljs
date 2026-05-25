@@ -69,6 +69,23 @@
 (defn random-factor [randomness scale]
   (+ 1 (* (- (js/Math.random) 0.5) randomness scale)))
 
+(defn auto-interval-ms [state-snapshot]
+  (let [frequency (protocol/maybe-number (:frequency state-snapshot) (:frequency default-state))
+        randomness (protocol/maybe-number (:randomness state-snapshot) (:randomness default-state))]
+    (when (pos? frequency)
+      (* (/ 60 frequency)
+         1000
+         (random-factor randomness 1.0)))))
+
+(defn auto-command? [command]
+  (contains? #{"configure"
+               "enable"
+               "disable"
+               "setFrequency"
+               "setRandomness"
+               "reset"}
+             (:type command)))
+
 (defn build-blink-curves [intensity duration randomness]
   (let [final-intensity (protocol/clamp 0 1 (* intensity (random-factor randomness 0.3)))
         close-time (* duration 0.35)

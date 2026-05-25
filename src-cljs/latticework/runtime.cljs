@@ -58,34 +58,63 @@
   ([config host]
    (let [state (blink/create-state (protocol/js->data config))
          host (or host #js {})
+         auto-timer (atom nil)
          disposed (atom false)
-         emit! (fn [outputs]
-                 (when-not @disposed
-                   (apply-outputs! host outputs)))]
-     (emit! [(protocol/emit-state blink/agency-name (blink/snapshot state))])
-     #js {:configure (fn [next-config]
-                       (emit! (blink/configure! state (protocol/js->data next-config))))
-          :enable (fn []
-                    (emit! (blink/enable! state)))
-          :disable (fn []
-                     (emit! (blink/disable! state)))
-          :setFrequency (fn [frequency]
-                          (emit! (blink/set-frequency! state frequency)))
-          :setDuration (fn [duration]
-                         (emit! (blink/set-duration! state duration)))
-          :setIntensity (fn [intensity]
-                          (emit! (blink/set-intensity! state intensity)))
-          :setRandomness (fn [randomness]
-                           (emit! (blink/set-randomness! state randomness)))
-          :triggerBlink (fn
-                          ([] (emit! (blink/trigger-blink! state nil)))
-                          ([overrides] (emit! (blink/trigger-blink! state (protocol/js->data overrides)))))
-          :reset (fn []
-                   (emit! (blink/reset-state! state)))
-          :getState (fn []
-                      (protocol/data->js (blink/snapshot state)))
-          :dispose (fn []
-                     (reset! disposed true))})))
+         clear-auto! (fn []
+                       (when-let [timer @auto-timer]
+                         (js/clearTimeout timer)
+                         (reset! auto-timer nil)))]
+     (letfn [(emit! [outputs]
+               (when-not @disposed
+                 (apply-outputs! host outputs)))
+             (schedule-next-auto! []
+               (clear-auto!)
+               (when (and (not @disposed) (:enabled @state))
+                 (when-let [interval (blink/auto-interval-ms (blink/snapshot state))]
+                   (reset! auto-timer
+                           (js/setTimeout
+                            (fn []
+                              (reset! auto-timer nil)
+                              (when (and (not @disposed) (:enabled @state))
+                                (emit! (blink/trigger-blink! state nil))
+                                (schedule-next-auto!)))
+                            interval)))))
+             (sync-auto! []
+               (if (and (not @disposed) (:enabled @state))
+                 (schedule-next-auto!)
+                 (clear-auto!)))]
+       (emit! [(protocol/emit-state blink/agency-name (blink/snapshot state))])
+       (sync-auto!)
+       #js {:configure (fn [next-config]
+                         (emit! (blink/configure! state (protocol/js->data next-config)))
+                         (sync-auto!))
+            :enable (fn []
+                      (emit! (blink/enable! state))
+                      (sync-auto!))
+            :disable (fn []
+                       (emit! (blink/disable! state))
+                       (sync-auto!))
+            :setFrequency (fn [frequency]
+                            (emit! (blink/set-frequency! state frequency))
+                            (sync-auto!))
+            :setDuration (fn [duration]
+                           (emit! (blink/set-duration! state duration)))
+            :setIntensity (fn [intensity]
+                            (emit! (blink/set-intensity! state intensity)))
+            :setRandomness (fn [randomness]
+                             (emit! (blink/set-randomness! state randomness))
+                             (sync-auto!))
+            :triggerBlink (fn
+                            ([] (emit! (blink/trigger-blink! state nil)))
+                            ([overrides] (emit! (blink/trigger-blink! state (protocol/js->data overrides)))))
+            :reset (fn []
+                     (emit! (blink/reset-state! state))
+                     (sync-auto!))
+            :getState (fn []
+                        (protocol/data->js (blink/snapshot state)))
+            :dispose (fn []
+                       (reset! disposed true)
+                       (clear-auto!))}))))
 
 (defn create-worker-client [worker host]
   (let [host (or host #js {})
