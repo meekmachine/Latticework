@@ -1,5 +1,6 @@
 (ns latticework.runtime
   (:require [latticework.blink :as blink]
+            [latticework.gaze :as gaze]
             [latticework.protocol :as protocol]))
 
 (defn- fn-prop [value key]
@@ -15,7 +16,9 @@
     (on-state (protocol/data->js state))))
 
 (defn- schedule-cleanup! [host scheduled-name snippet]
-  (when (and scheduled-name (fn-prop host "removeSnippet"))
+  (when (and scheduled-name
+             (not (:mixerClampWhenFinished snippet))
+             (fn-prop host "removeSnippet"))
     (let [duration-ms (+ (* (or (:maxTime snippet) 0) 1000) 50)]
       (js/setTimeout
        (fn []
@@ -116,6 +119,41 @@
                        (reset! disposed true)
                        (clear-auto!))}))))
 
+(defn create-in-process-gaze-agency
+  ([config] (create-in-process-gaze-agency config nil))
+  ([config host]
+   (let [state (gaze/create-state (protocol/js->data config))
+         host (or host #js {})
+         disposed (atom false)]
+     (letfn [(emit! [outputs]
+               (when-not @disposed
+                 (apply-outputs! host outputs))
+               outputs)
+             (schedule! [target]
+               (let [outputs (emit! (gaze/schedule-target! state (protocol/js->data target)))]
+                 (boolean (some #(= "scheduleSnippet" (:type %)) outputs))))]
+       (emit! [(protocol/emit-state gaze/agency-name (gaze/snapshot state))])
+       #js {:configure (fn [next-config]
+                         (emit! (gaze/configure! state (protocol/js->data next-config))))
+            :updateConfig (fn [next-config]
+                            (emit! (gaze/configure! state (protocol/js->data next-config))))
+            :setMode (fn [mode]
+                       (emit! (gaze/set-mode! state mode)))
+            :setTarget (fn [target]
+                         (schedule! target))
+            :schedule (fn [target]
+                        (schedule! target))
+            :resetToNeutral (fn
+                              ([] (emit! (gaze/reset-to-neutral! state nil)))
+                              ([duration] (emit! (gaze/reset-to-neutral! state duration))))
+            :stop (fn []
+                    (emit! (gaze/stop! state)))
+            :getState (fn []
+                        (protocol/data->js (gaze/snapshot state)))
+            :dispose (fn []
+                       (emit! (gaze/stop! state))
+                       (reset! disposed true))}))))
+
 (defn create-worker-client [worker host]
   (let [host (or host #js {})
         disposed (atom false)
@@ -158,5 +196,25 @@
                             (.post client command))))
          :reset (fn []
                   (.post client #js {:agency "blink" :type "reset"}))
+         :dispose (fn []
+                    (.dispose client))}))
+
+(defn create-gaze-worker-client [worker host]
+  (let [client (create-worker-client worker host)]
+    #js {:configure (fn [config]
+                      (.configure client gaze/agency-name config))
+         :updateConfig (fn [config]
+                         (.configure client gaze/agency-name config))
+         :setMode (fn [mode]
+                    (.post client #js {:agency "gaze" :type "setMode" :mode mode}))
+         :setTarget (fn [target]
+                      (.post client #js {:agency "gaze" :type "setTarget" :target target}))
+         :schedule (fn [target]
+                     (.post client #js {:agency "gaze" :type "schedule" :target target}))
+         :resetToNeutral (fn
+                           ([] (.post client #js {:agency "gaze" :type "resetToNeutral"}))
+                           ([duration] (.post client #js {:agency "gaze" :type "resetToNeutral" :duration duration})))
+         :stop (fn []
+                 (.post client #js {:agency "gaze" :type "stop"}))
          :dispose (fn []
                     (.dispose client))}))

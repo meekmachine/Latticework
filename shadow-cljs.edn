@@ -7,7 +7,9 @@
    {:index
     {:exports
      {createBlinkAgency latticework.npm/create-blink-agency
+      createGazeAgency latticework.npm/create-gaze-agency
       createBlinkWorkerClient latticework.npm/create-blink-worker-client
+      createGazeWorkerClient latticework.npm/create-gaze-worker-client
       createAgencyWorkerClient latticework.npm/create-agency-worker-client
       installLatticework latticework.npm/install-latticework}}}}
 

@@ -1,9 +1,11 @@
 (ns latticework.worker
   (:require [latticework.blink :as blink]
+            [latticework.gaze :as gaze]
             [latticework.protocol :as protocol]))
 
 (defonce blink-state (blink/create-state))
 (defonce blink-auto-timer (atom nil))
+(defonce gaze-state (gaze/create-state))
 
 (defn- post-output! [output]
   (.postMessage js/self (protocol/data->js output)))
@@ -43,6 +45,7 @@
               (when (blink/auto-command? command)
                 (sync-blink-auto!))
               outputs)
+    "gaze" (gaze/handle-command! gaze-state command)
     [(protocol/emit-error
       (or (:agency command) "unknown")
       (str "Unsupported agency: " (:agency command)))]))
@@ -54,4 +57,5 @@
 (defn init []
   (.addEventListener js/self "message" handle-message!)
   (post-output! (protocol/emit-state blink/agency-name (blink/snapshot blink-state)))
+  (post-output! (protocol/emit-state gaze/agency-name (gaze/snapshot gaze-state)))
   (sync-blink-auto!))
