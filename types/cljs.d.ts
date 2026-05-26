@@ -53,6 +53,53 @@ export interface BlinkAgency {
   dispose(): void;
 }
 
+export interface GazeTarget {
+  x: number;
+  y: number;
+  z?: number;
+}
+
+export type GazeMode = 'manual' | 'mouse' | 'webcam';
+
+export interface GazeAgencyConfig {
+  eyesEnabled?: boolean;
+  headEnabled?: boolean;
+  headFollowEyes?: boolean;
+  mirrored?: boolean;
+  smoothFactor?: number;
+  minDelta?: number;
+  eyeIntensity?: number;
+  headIntensity?: number;
+  duration?: number;
+  eyeDuration?: number;
+  headDuration?: number;
+  eyePriority?: number;
+  headPriority?: number;
+  headRoll?: number;
+}
+
+export interface GazeAgencyState {
+  target: Required<GazeTarget>;
+  current: Required<GazeTarget>;
+  mode: GazeMode;
+  isActive: boolean;
+  scheduledGazeCount: number;
+  lastScheduledTime: number | null;
+  config: Required<Omit<GazeAgencyConfig, 'eyeDuration' | 'headDuration'>> & Pick<GazeAgencyConfig, 'eyeDuration' | 'headDuration'>;
+}
+
+export interface GazeAgency {
+  configure(config: GazeAgencyConfig): void;
+  updateConfig(config: GazeAgencyConfig): void;
+  setMode(mode: GazeMode): void;
+  setTarget(target: GazeTarget): boolean;
+  schedule(target: GazeTarget): boolean;
+  resetToNeutral(duration?: number): void;
+  stop(): void;
+  getState(): GazeAgencyState;
+  dispose(): void;
+}
+
 export interface WorkerAgencyClient {
   post(command: unknown): void;
   configure(agency: string, config: unknown): void;
@@ -61,16 +108,34 @@ export interface WorkerAgencyClient {
 
 export interface BlinkWorkerClient extends Omit<BlinkAgency, 'getState'> {}
 
+export interface GazeWorkerClient {
+  configure(config: GazeAgencyConfig): void;
+  updateConfig(config: GazeAgencyConfig): void;
+  setMode(mode: GazeMode): void;
+  setTarget(target: GazeTarget): void;
+  schedule(target: GazeTarget): void;
+  resetToNeutral(duration?: number): void;
+  stop(): void;
+  dispose(): void;
+}
+
 export interface LatticeworkCljsApi {
   createBlinkAgency(config?: BlinkAgencyConfig, host?: WorkerAgencyHost): BlinkAgency;
+  createGazeAgency(config?: GazeAgencyConfig, host?: WorkerAgencyHost): GazeAgency;
   createAgencyWorkerClient(worker: Worker, host?: WorkerAgencyHost): WorkerAgencyClient;
   createBlinkWorkerClient(worker: Worker, host?: WorkerAgencyHost): BlinkWorkerClient;
+  createGazeWorkerClient(worker: Worker, host?: WorkerAgencyHost): GazeWorkerClient;
 }
 
 export declare function createBlinkAgency(
   config?: BlinkAgencyConfig,
   host?: WorkerAgencyHost,
 ): BlinkAgency;
+
+export declare function createGazeAgency(
+  config?: GazeAgencyConfig,
+  host?: WorkerAgencyHost,
+): GazeAgency;
 
 export declare function createAgencyWorkerClient(
   worker: Worker,
@@ -81,5 +146,10 @@ export declare function createBlinkWorkerClient(
   worker: Worker,
   host?: WorkerAgencyHost,
 ): BlinkWorkerClient;
+
+export declare function createGazeWorkerClient(
+  worker: Worker,
+  host?: WorkerAgencyHost,
+): GazeWorkerClient;
 
 export declare function installLatticework(target?: typeof globalThis): LatticeworkCljsApi;
