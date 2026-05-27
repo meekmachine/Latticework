@@ -492,6 +492,7 @@ export class EyeHeadTrackingService {
     this.trackingMode = mode;
     this.machine?.send({ type: 'SET_MODE', mode });
     this.experimentalGaze?.setMode(mode);
+    this.cameraRelativeGazeTracker?.setEnabled(this.isCameraTrackingActive());
 
     // Setup new mode
     if (mode === 'mouse') {
@@ -748,11 +749,15 @@ export class EyeHeadTrackingService {
   }
 
   private isCameraTrackingActive(): boolean {
-    return this.isStarted && this.isTrackingEnabled();
+    return this.isStarted && this.isLiveTrackingMode() && this.isTrackingEnabled();
   }
 
   private isTrackingEnabled(): boolean {
     return Boolean(this.config.eyeTrackingEnabled || this.config.headTrackingEnabled);
+  }
+
+  private isLiveTrackingMode(): boolean {
+    return this.trackingMode === 'mouse' || this.trackingMode === 'webcam';
   }
 
   private getCameraController(): CameraRelativeGazeController | null {
@@ -764,7 +769,7 @@ export class EyeHeadTrackingService {
   }
 
   private applyCameraRelativeOffsetForCurrentTarget(): void {
-    if (!this.isStarted || !this.isTrackingEnabled()) {
+    if (!this.isCameraTrackingActive()) {
       return;
     }
 
@@ -792,7 +797,7 @@ export class EyeHeadTrackingService {
     this.cameraRelativeGazeTracker = new CameraRelativeGazeTracker(controller, {
       enabled: false,
       onChange: () => {
-        if (!this.isStarted || !this.isTrackingEnabled()) {
+        if (!this.isCameraTrackingActive()) {
           return;
         }
 
