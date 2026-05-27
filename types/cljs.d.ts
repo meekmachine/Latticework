@@ -24,6 +24,8 @@ export interface WorkerAgencyHost {
   setSnippetReverse?: (name: string, reverse: boolean) => void;
   onAnimationEffect?: (effect: AnimationEffect) => void;
   onAnimationEvent?: (event: AnimationEvent) => void;
+  onProsodicEvent?: (event: ProsodicEvent) => void;
+  onProsodicFadePlan?: (plan: ProsodicFadePlan) => void;
   applyHairState?: (
     state: HairState,
     objects: HairObjectRef[],
@@ -288,6 +290,77 @@ export interface GazeAgency {
   dispose(): void;
 }
 
+export interface ProsodicConfig {
+  browPriority?: number;
+  headPriority?: number;
+  pulsePriority?: number;
+  defaultIntensity?: number;
+  fadeSteps?: number;
+  fadeStepInterval?: number;
+}
+
+export interface ProsodicSnippetInput {
+  name?: string;
+  curves?: Record<string, AnimationCurvePoint[]>;
+  snippetIntensityScale?: number;
+  snippetPlaybackRate?: number;
+  priority?: number;
+}
+
+export interface ProsodicState {
+  browStatus: 'idle' | 'active' | 'stopping';
+  headStatus: 'idle' | 'active' | 'stopping';
+  browIntensity: number;
+  headIntensity: number;
+  isLooping: boolean;
+}
+
+export interface ProsodicSnapshot {
+  status: 'idle' | 'speaking' | 'fading';
+  browSnippet: unknown | null;
+  headSnippet: unknown | null;
+  scheduledNames: { brow: string | null; head: string | null };
+  fadeInProgress: { brow: boolean; head: boolean };
+  lastPulseWordIndex: number | null;
+  config: Required<ProsodicConfig>;
+  eventCount: number;
+  lastUpdatedTime: number | null;
+}
+
+export interface ProsodicEvent {
+  type: string;
+  timestamp: number;
+  snippetName?: string;
+  wordIndex?: number;
+  channel?: 'brow' | 'head' | 'both';
+  [key: string]: unknown;
+}
+
+export interface ProsodicFadePlanStep {
+  channel: 'brow' | 'head';
+  name: string;
+  intensity: number;
+  delayMs: number;
+  removeOnComplete: boolean;
+}
+
+export interface ProsodicFadePlan {
+  steps: ProsodicFadePlanStep[];
+}
+
+export interface ProsodicAgency {
+  loadBrow(data: ProsodicSnippetInput): void;
+  loadHead(data: ProsodicSnippetInput): void;
+  updateConfig(config: ProsodicConfig): void;
+  startTalking(): void;
+  stopTalking(): void;
+  pulse(wordIndex: number): void;
+  stop(): void;
+  getState(): ProsodicState;
+  getSnapshot(): ProsodicSnapshot;
+  dispose(): void;
+}
+
 export interface HairColor {
   name: string;
   baseColor: string;
@@ -489,16 +562,29 @@ export interface HairWorkerClient {
   dispose(): void;
 }
 
+export interface ProsodicWorkerClient {
+  loadBrow(data: ProsodicSnippetInput): void;
+  loadHead(data: ProsodicSnippetInput): void;
+  updateConfig(config: ProsodicConfig): void;
+  startTalking(): void;
+  stopTalking(): void;
+  pulse(wordIndex: number): void;
+  stop(): void;
+  dispose(): void;
+}
+
 export interface LatticeworkCljsApi {
   createAnimationAgency(config?: Partial<AnimationAgencyState>, host?: WorkerAgencyHost): AnimationAgency;
   createBlinkAgency(config?: BlinkAgencyConfig, host?: WorkerAgencyHost): BlinkAgency;
   createGazeAgency(config?: GazeAgencyConfig, host?: WorkerAgencyHost): GazeAgency;
   createHairAgency(config?: HairAgencyConfig, host?: WorkerAgencyHost): HairAgency;
+  createProsodicAgency(config?: ProsodicConfig, host?: WorkerAgencyHost): ProsodicAgency;
   createAgencyWorkerClient(worker: Worker, host?: WorkerAgencyHost): WorkerAgencyClient;
   createAnimationWorkerClient(worker: Worker, host?: WorkerAgencyHost): AnimationWorkerClient;
   createBlinkWorkerClient(worker: Worker, host?: WorkerAgencyHost): BlinkWorkerClient;
   createGazeWorkerClient(worker: Worker, host?: WorkerAgencyHost): GazeWorkerClient;
   createHairWorkerClient(worker: Worker, host?: WorkerAgencyHost): HairWorkerClient;
+  createProsodicWorkerClient(worker: Worker, host?: WorkerAgencyHost): ProsodicWorkerClient;
 }
 
 export declare function createAnimationAgency(
@@ -520,6 +606,11 @@ export declare function createHairAgency(
   config?: HairAgencyConfig,
   host?: WorkerAgencyHost,
 ): HairAgency;
+
+export declare function createProsodicAgency(
+  config?: ProsodicConfig,
+  host?: WorkerAgencyHost,
+): ProsodicAgency;
 
 export declare function createAgencyWorkerClient(
   worker: Worker,
@@ -545,5 +636,10 @@ export declare function createHairWorkerClient(
   worker: Worker,
   host?: WorkerAgencyHost,
 ): HairWorkerClient;
+
+export declare function createProsodicWorkerClient(
+  worker: Worker,
+  host?: WorkerAgencyHost,
+): ProsodicWorkerClient;
 
 export declare function installLatticework(target?: typeof globalThis): LatticeworkCljsApi;

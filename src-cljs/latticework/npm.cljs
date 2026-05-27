@@ -17,6 +17,10 @@
   ([config] (runtime/create-in-process-hair-agency config nil))
   ([config host] (runtime/create-in-process-hair-agency config host)))
 
+(defn create-prosodic-agency
+  ([config] (runtime/create-in-process-prosodic-agency config nil))
+  ([config host] (runtime/create-in-process-prosodic-agency config host)))
+
 (defn create-agency-worker-client [worker host]
   (runtime/create-worker-client worker host))
 
@@ -32,6 +36,9 @@
 (defn create-hair-worker-client [worker host]
   (runtime/create-hair-worker-client worker host))
 
+(defn create-prosodic-worker-client [worker host]
+  (runtime/create-prosodic-worker-client worker host))
+
 (defn install-latticework
   ([] (install-latticework js/globalThis))
   ([target]
@@ -39,10 +46,12 @@
                   :createAnimationAgency create-animation-agency
                   :createGazeAgency create-gaze-agency
                   :createHairAgency create-hair-agency
+                  :createProsodicAgency create-prosodic-agency
                   :createAgencyWorkerClient create-agency-worker-client
                   :createAnimationWorkerClient create-animation-worker-client
                   :createBlinkWorkerClient create-blink-worker-client
                   :createGazeWorkerClient create-gaze-worker-client
-                  :createHairWorkerClient create-hair-worker-client}]
+                  :createHairWorkerClient create-hair-worker-client
+                  :createProsodicWorkerClient create-prosodic-worker-client}]
      (aset target "Latticework" api)
      api)))

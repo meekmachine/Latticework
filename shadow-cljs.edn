@@ -10,10 +10,12 @@
       createAnimationAgency latticework.npm/create-animation-agency
       createGazeAgency latticework.npm/create-gaze-agency
       createHairAgency latticework.npm/create-hair-agency
+      createProsodicAgency latticework.npm/create-prosodic-agency
       createAnimationWorkerClient latticework.npm/create-animation-worker-client
       createBlinkWorkerClient latticework.npm/create-blink-worker-client
       createGazeWorkerClient latticework.npm/create-gaze-worker-client
       createHairWorkerClient latticework.npm/create-hair-worker-client
+      createProsodicWorkerClient latticework.npm/create-prosodic-worker-client
       createAgencyWorkerClient latticework.npm/create-agency-worker-client
       installLatticework latticework.npm/install-latticework}}}}
 

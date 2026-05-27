@@ -3,6 +3,7 @@
             [latticework.blink :as blink]
             [latticework.gaze :as gaze]
             [latticework.hair :as hair]
+            [latticework.prosodic :as prosodic]
             [latticework.protocol :as protocol]))
 
 (defn- fn-prop [value key]
@@ -117,6 +118,23 @@
     "animationEvent"
     (when-let [on-animation-event (fn-prop host "onAnimationEvent")]
       (on-animation-event (protocol/data->js (:event output))))
+
+    "prosodicEvent"
+    (when-let [on-prosodic-event (fn-prop host "onProsodicEvent")]
+      (on-prosodic-event (protocol/data->js (:event output))))
+
+    "prosodicFadePlan"
+    (let [plan (:plan output)]
+      (when-let [on-prosodic-fade-plan (fn-prop host "onProsodicFadePlan")]
+        (on-prosodic-fade-plan (protocol/data->js plan)))
+      (when-not (fn-prop host "onProsodicFadePlan")
+        (doseq [step (:steps plan)]
+          (js/setTimeout
+           (fn []
+             (call-first! host ["setSnippetIntensityScale"] (:name step) (:intensity step))
+             (when (:removeOnComplete step)
+               (call-first! host ["removeSnippet" "remove"] (:name step))))
+           (:delayMs step)))))
 
     "applyHairState"
     (if-let [apply-hair-state (fn-prop host "applyHairState")]
@@ -301,6 +319,39 @@
             :dispose (fn []
                        (reset! disposed true))}))))
 
+(defn create-in-process-prosodic-agency
+  ([config] (create-in-process-prosodic-agency config nil))
+  ([config host]
+   (let [state (prosodic/create-state (protocol/js->data config))
+         host (or host #js {})
+         disposed (atom false)]
+     (letfn [(emit! [outputs]
+               (when-not @disposed
+                 (apply-outputs! host outputs))
+               outputs)]
+       (emit! [(protocol/emit-state prosodic/agency-name (prosodic/snapshot state))])
+       #js {:loadBrow (fn [data]
+                        (emit! (prosodic/load-brow! state (protocol/js->data data))))
+            :loadHead (fn [data]
+                        (emit! (prosodic/load-head! state (protocol/js->data data))))
+            :updateConfig (fn [config]
+                            (emit! (prosodic/update-config! state (protocol/js->data config))))
+            :startTalking (fn []
+                            (emit! (prosodic/start-talking! state)))
+            :stopTalking (fn []
+                           (emit! (prosodic/stop-talking! state)))
+            :pulse (fn [word-index]
+                     (emit! (prosodic/pulse! state word-index)))
+            :stop (fn []
+                    (emit! (prosodic/stop! state)))
+            :getState (fn []
+                        (protocol/data->js (prosodic/prosodic-state state)))
+            :getSnapshot (fn []
+                           (protocol/data->js (prosodic/snapshot state)))
+            :dispose (fn []
+                       (emit! (prosodic/stop! state))
+                       (reset! disposed true))}))))
+
 (defn create-in-process-hair-agency
   ([config] (create-in-process-hair-agency config nil))
   ([config host]
@@ -438,6 +489,25 @@
                             (.post client command))))
          :reset (fn []
                   (.post client #js {:agency "blink" :type "reset"}))
+         :dispose (fn []
+                    (.dispose client))}))
+
+(defn create-prosodic-worker-client [worker host]
+  (let [client (create-worker-client worker host)]
+    #js {:loadBrow (fn [data]
+                     (.post client #js {:agency "prosodic" :type "loadBrow" :data data}))
+         :loadHead (fn [data]
+                     (.post client #js {:agency "prosodic" :type "loadHead" :data data}))
+         :updateConfig (fn [config]
+                         (.post client #js {:agency "prosodic" :type "updateConfig" :config config}))
+         :startTalking (fn []
+                         (.post client #js {:agency "prosodic" :type "startTalking"}))
+         :stopTalking (fn []
+                        (.post client #js {:agency "prosodic" :type "stopTalking"}))
+         :pulse (fn [word-index]
+                  (.post client #js {:agency "prosodic" :type "pulse" :wordIndex word-index}))
+         :stop (fn []
+                 (.post client #js {:agency "prosodic" :type "stop"}))
          :dispose (fn []
                     (.dispose client))}))
 

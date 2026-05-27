@@ -3,6 +3,7 @@ import {
   createBlinkAgency,
   createGazeAgency,
   createHairAgency,
+  createProsodicAgency,
 } from '../dist/cljs/index.js';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -286,6 +287,100 @@ if (gazeStates.length < 4) {
 
 gaze.dispose();
 
+const prosodicScheduled = [];
+const prosodicRemoved = [];
+const prosodicEvents = [];
+const prosodicFadePlans = [];
+const prosodicStates = [];
+
+const prosodic = createProsodicAgency(
+  { fadeSteps: 3, fadeStepInterval: 40, defaultIntensity: 0.6 },
+  {
+    scheduleSnippet(snippet, opts) {
+      prosodicScheduled.push({ snippet, opts });
+      return snippet.name;
+    },
+    removeSnippet(name) {
+      prosodicRemoved.push(name);
+    },
+    onProsodicEvent(event) {
+      prosodicEvents.push(event);
+    },
+    onProsodicFadePlan(plan) {
+      prosodicFadePlans.push(plan);
+    },
+    onState(state) {
+      if (state?.status) {
+        prosodicStates.push(state);
+      }
+    },
+  },
+);
+
+prosodic.loadBrow({
+  name: 'brow_small',
+  curves: {
+    1: [
+      { time: 0, intensity: 0 },
+      { time: 0.1, intensity: 50 },
+    ],
+  },
+});
+prosodic.loadHead({
+  name: 'head_small',
+  curves: {
+    53: [
+      { time: 0, intensity: 0 },
+      { time: 0.2, intensity: 0.4 },
+    ],
+  },
+});
+
+prosodic.startTalking();
+
+if (prosodicScheduled.length !== 2) {
+  throw new Error(`Expected prosodic start to schedule brow and head, received ${prosodicScheduled.length}`);
+}
+
+if (prosodicScheduled[0].snippet.curves['1']?.[1]?.intensity !== 0.5) {
+  throw new Error(`Expected prosodic CLJS to normalize 0-100 intensities, saw ${JSON.stringify(prosodicScheduled[0])}`);
+}
+
+let prosodicState = prosodic.getState();
+if (prosodicState.browStatus !== 'active' || prosodicState.headStatus !== 'active') {
+  throw new Error(`Expected active prosodic state, received ${JSON.stringify(prosodicState)}`);
+}
+
+prosodic.pulse(1);
+if (!prosodicRemoved.includes('brow_small') || !prosodicRemoved.includes('head_small')) {
+  throw new Error(`Expected odd prosodic pulse to restart brow and head, removed ${prosodicRemoved.join(', ')}`);
+}
+
+prosodic.stopTalking();
+prosodicState = prosodic.getState();
+if (prosodicState.browStatus !== 'stopping' || prosodicState.headStatus !== 'stopping') {
+  throw new Error(`Expected stopping prosodic state after stopTalking, received ${JSON.stringify(prosodicState)}`);
+}
+
+if (prosodicFadePlans[0]?.steps?.length !== 6) {
+  throw new Error(`Expected 3 fade steps for brow and head, received ${JSON.stringify(prosodicFadePlans)}`);
+}
+
+prosodic.stop();
+if (prosodic.getState().isLooping !== false) {
+  throw new Error('Expected prosodic stop to clear looping state');
+}
+
+if (!prosodicEvents.some((event) => event.type === 'PULSE' && event.wordIndex === 1)) {
+  throw new Error(`Expected prosodic pulse event, received ${JSON.stringify(prosodicEvents)}`);
+}
+
+if (prosodicStates.length < 6) {
+  throw new Error(`Expected prosodic state callbacks, received ${prosodicStates.length}`);
+}
+
+prosodic.dispose();
+
 const hairObjectStates = [];
 const hairPhysicsUpdates = [];
 const hairStates = [];
@@ -381,5 +476,5 @@ if (hairStates.length < 8) {
 hair.dispose();
 
 console.log(
-  `CLJS smoke passed: blink ${snippet.name}; automatic count ${scheduledAfterAuto - 1}; animation states ${animationStates.length}; gaze snippets ${gazeScheduled.length}; hair states ${hairStates.length}`,
+  `CLJS smoke passed: blink ${snippet.name}; automatic count ${scheduledAfterAuto - 1}; animation states ${animationStates.length}; gaze snippets ${gazeScheduled.length}; prosodic states ${prosodicStates.length}; hair states ${hairStates.length}`,
 );
