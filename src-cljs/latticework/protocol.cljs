@@ -38,6 +38,11 @@
    :agency agency
    :name name})
 
+(defn emit-animation-effect [agency effect]
+  {:type "animationEffect"
+   :agency agency
+   :effect effect})
+
 (defn emit-error [agency message]
   {:type "error"
    :agency agency

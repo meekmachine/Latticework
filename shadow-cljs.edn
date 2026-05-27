@@ -7,9 +7,21 @@
    {:index
     {:exports
      {createBlinkAgency latticework.npm/create-blink-agency
+      createAnimationAgency latticework.npm/create-animation-agency
       createGazeAgency latticework.npm/create-gaze-agency
+      createEyeHeadTrackingAgency latticework.npm/create-eye-head-tracking-agency
+      createHairAgency latticework.npm/create-hair-agency
+      createLipSyncAgency latticework.npm/create-lipsync-agency
+      createProsodicAgency latticework.npm/create-prosodic-agency
+      createVocalAgency latticework.npm/create-vocal-agency
+      createAnimationWorkerClient latticework.npm/create-animation-worker-client
       createBlinkWorkerClient latticework.npm/create-blink-worker-client
       createGazeWorkerClient latticework.npm/create-gaze-worker-client
+      createEyeHeadTrackingWorkerClient latticework.npm/create-eye-head-tracking-worker-client
+      createHairWorkerClient latticework.npm/create-hair-worker-client
+      createLipSyncWorkerClient latticework.npm/create-lipsync-worker-client
+      createProsodicWorkerClient latticework.npm/create-prosodic-worker-client
+      createVocalWorkerClient latticework.npm/create-vocal-worker-client
       createAgencyWorkerClient latticework.npm/create-agency-worker-client
       installLatticework latticework.npm/install-latticework}}}}
 
