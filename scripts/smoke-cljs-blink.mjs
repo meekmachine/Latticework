@@ -1,4 +1,9 @@
-import { createBlinkAgency, createGazeAgency, createHairAgency } from '../dist/cljs/index.js';
+import {
+  createAnimationAgency,
+  createBlinkAgency,
+  createGazeAgency,
+  createHairAgency,
+} from '../dist/cljs/index.js';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -60,6 +65,137 @@ if (states.length < 5) {
 }
 
 agency.dispose();
+
+const animationScheduled = [];
+const animationRemoved = [];
+const animationEffects = [];
+const animationEvents = [];
+const animationStates = [];
+
+const animation = createAnimationAgency(
+  undefined,
+  {
+    scheduleSnippet(snippet, opts) {
+      animationScheduled.push({ snippet, opts });
+      return snippet.name;
+    },
+    updateSnippet(snippet) {
+      animationEffects.push({ op: 'hostUpdateSnippet', snippet });
+      return snippet.name;
+    },
+    removeSnippet(name) {
+      animationRemoved.push(name);
+    },
+    seekSnippet(name, offsetSec) {
+      animationEffects.push({ op: 'hostSeekSnippet', name, offsetSec });
+    },
+    pauseSnippet(name) {
+      animationEffects.push({ op: 'hostPauseSnippet', name });
+    },
+    resumeSnippet(name) {
+      animationEffects.push({ op: 'hostResumeSnippet', name });
+    },
+    play() {
+      animationEffects.push({ op: 'hostPlayAll' });
+    },
+    pause() {
+      animationEffects.push({ op: 'hostPauseAll' });
+    },
+    stop() {
+      animationEffects.push({ op: 'hostStopAll' });
+    },
+    setSnippetPlaybackRate(name, rate) {
+      animationEffects.push({ op: 'hostSetRate', name, rate });
+    },
+    setSnippetIntensityScale(name, scale) {
+      animationEffects.push({ op: 'hostSetScale', name, scale });
+    },
+    onAnimationEffect(effect) {
+      animationEffects.push(effect);
+    },
+    onAnimationEvent(event) {
+      animationEvents.push(event);
+    },
+    onState(state) {
+      if (state?.globalPlaybackState) {
+        animationStates.push(state);
+      }
+    },
+  },
+);
+
+const animationName = animation.schedule(
+  {
+    name: 'cljs_smile',
+    snippetCategory: 'auSnippet',
+    curves: {
+      12: [
+        { time: 0, intensity: 0 },
+        { time: 0.2, intensity: 0.75 },
+      ],
+    },
+  },
+  { autoPlay: true, priority: 42, offsetSec: 0.05 },
+);
+
+if (animationName !== 'cljs_smile') {
+  throw new Error(`Expected scheduled animation name, received ${animationName}`);
+}
+
+if (animationScheduled.length !== 1 || animationScheduled[0].opts?.autoPlay !== true) {
+  throw new Error(`Expected animation host schedule, received ${JSON.stringify(animationScheduled)}`);
+}
+
+let animationState = animation.getState();
+const normalizedAnimation = animationState.snippets.cljs_smile;
+if (!normalizedAnimation?.isPlaying || normalizedAnimation.duration !== 0.2 || normalizedAnimation.snippetPriority !== 42) {
+  throw new Error(`Unexpected normalized animation state: ${JSON.stringify(normalizedAnimation)}`);
+}
+
+animation.setSnippetPlaybackRate('cljs_smile', 1.5);
+animation.setSnippetIntensityScale('cljs_smile', 0.4);
+animation.seek('cljs_smile', 0.1);
+animation.pause();
+animation.play();
+
+const scheduleSnapshot = animation.getScheduleSnapshot();
+if (scheduleSnapshot[0]?.name !== 'cljs_smile' || scheduleSnapshot[0]?.offset !== 0.1) {
+  throw new Error(`Unexpected animation schedule snapshot: ${JSON.stringify(scheduleSnapshot)}`);
+}
+
+animation.updateSnippet({
+  name: 'cljs_smile',
+  curves: {
+    12: [
+      { time: 0, intensity: 0.1 },
+      { time: 0.3, intensity: 0.9 },
+    ],
+  },
+});
+
+animationState = animation.getState();
+if (animationState.snippets.cljs_smile.duration !== 0.3) {
+  throw new Error(`Expected animation update to recalculate duration, received ${animationState.snippets.cljs_smile.duration}`);
+}
+
+animation.remove('cljs_smile');
+if (!animationRemoved.includes('cljs_smile')) {
+  throw new Error('Expected animation remove to hit host removeSnippet');
+}
+
+if (animation.getState().order.length !== 0) {
+  throw new Error(`Expected animation registry to be empty after remove: ${JSON.stringify(animation.getState())}`);
+}
+
+if (!animationEvents.some((event) => event.type === 'GLOBAL_PLAYBACK_CHANGED' && event.state === 'playing')) {
+  throw new Error(`Expected animation play event, saw ${JSON.stringify(animationEvents)}`);
+}
+
+if (animationStates.length < 8) {
+  throw new Error(`Expected animation state callbacks, received ${animationStates.length}`);
+}
+
+animation.dispose();
 
 const gazeScheduled = [];
 const gazeRemoved = [];
@@ -245,5 +381,5 @@ if (hairStates.length < 8) {
 hair.dispose();
 
 console.log(
-  `CLJS smoke passed: blink ${snippet.name}; automatic count ${scheduledAfterAuto - 1}; gaze snippets ${gazeScheduled.length}; hair states ${hairStates.length}`,
+  `CLJS smoke passed: blink ${snippet.name}; automatic count ${scheduledAfterAuto - 1}; animation states ${animationStates.length}; gaze snippets ${gazeScheduled.length}; hair states ${hairStates.length}`,
 );

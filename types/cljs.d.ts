@@ -6,7 +6,24 @@ export interface WorkerAgencyOutput {
 
 export interface WorkerAgencyHost {
   scheduleSnippet?: (snippet: unknown, opts?: { autoPlay?: boolean }) => string | null;
+  schedule?: (snippet: unknown, opts?: AnimationScheduleOptions) => string | null;
+  updateSnippet?: (snippet: AnimationSnippet) => string | null;
   removeSnippet?: (name: string) => void;
+  remove?: (name: string) => void;
+  seekSnippet?: (name: string, offsetSec: number) => void;
+  seek?: (name: string, offsetSec: number) => void;
+  pauseSnippet?: (name: string) => void;
+  resumeSnippet?: (name: string) => void;
+  restartSnippet?: (name: string) => void;
+  play?: () => void;
+  pause?: () => void;
+  stop?: () => void;
+  setSnippetPlaybackRate?: (name: string, rate: number) => void;
+  setSnippetIntensityScale?: (name: string, scale: number) => void;
+  setSnippetLoopMode?: (name: string, mode: AnimationLoopMode) => void;
+  setSnippetReverse?: (name: string, reverse: boolean) => void;
+  onAnimationEffect?: (effect: AnimationEffect) => void;
+  onAnimationEvent?: (event: AnimationEvent) => void;
   applyHairState?: (
     state: HairState,
     objects: HairObjectRef[],
@@ -19,6 +36,168 @@ export interface WorkerAgencyHost {
   onOutput?: (output: WorkerAgencyOutput) => void;
   onState?: (state: unknown) => void;
   onError?: (output: WorkerAgencyOutput) => void;
+}
+
+export type AnimationEasingType = 'linear' | 'easeInOut' | 'easeInOutCubic' | 'easeIn' | 'easeOut';
+export type AnimationLoopMode = 'once' | 'repeat' | 'pingpong';
+export type AnimationBlendMode = 'replace' | 'additive';
+export type AnimationSnippetCategory = 'auSnippet' | 'visemeSnippet' | 'eyeHeadTracking' | 'combined' | 'default';
+
+export interface AnimationCurvePoint {
+  time: number;
+  intensity: number;
+  inherit?: boolean;
+}
+
+export interface AnimationSnippet {
+  name?: string;
+  curves?: Record<string, AnimationCurvePoint[]>;
+  au?: Array<{ t: number; id: number; v: number; inherit?: boolean }>;
+  viseme?: Array<{ t: number; key: string; v: number; inherit?: boolean }>;
+  loop?: boolean;
+  isPlaying?: boolean;
+  currentTime?: number;
+  snippetCategory?: AnimationSnippetCategory;
+  snippetPriority?: number;
+  snippetPlaybackRate?: number;
+  snippetIntensityScale?: number;
+  snippetBlendMode?: AnimationBlendMode;
+  snippetJawScale?: number;
+  autoVisemeJaw?: boolean;
+  snippetBalance?: number;
+  snippetBalanceMap?: Record<string, number>;
+  snippetEasing?: AnimationEasingType;
+  mixerChannel?: string;
+  mixerBlendMode?: string;
+  mixerWeight?: number;
+  mixerFadeDurationMs?: number;
+  mixerWarpDurationMs?: number;
+  mixerTimeScale?: number;
+  mixerLoopMode?: AnimationLoopMode;
+  mixerRepeatCount?: number;
+  mixerClampWhenFinished?: boolean;
+  mixerAdditive?: boolean;
+  mixerReverse?: boolean;
+  [key: string]: unknown;
+}
+
+export interface NormalizedAnimationSnippet extends Required<Pick<
+  AnimationSnippet,
+  | 'name'
+  | 'curves'
+  | 'loop'
+  | 'isPlaying'
+  | 'currentTime'
+  | 'snippetCategory'
+  | 'snippetPriority'
+  | 'snippetPlaybackRate'
+  | 'snippetIntensityScale'
+  | 'snippetBlendMode'
+  | 'snippetJawScale'
+  | 'snippetBalance'
+  | 'snippetBalanceMap'
+  | 'snippetEasing'
+  | 'mixerLoopMode'
+  | 'mixerReverse'
+>> {
+  loopIteration: number;
+  loopDirection: 1 | -1;
+  lastLoopTime: number;
+  startWallTime: number;
+  duration: number;
+  cursor: Record<string, number>;
+  autoVisemeJaw?: boolean;
+  mixerChannel?: string;
+  mixerBlendMode?: string;
+  mixerWeight?: number;
+  mixerFadeDurationMs?: number;
+  mixerWarpDurationMs?: number;
+  mixerTimeScale?: number;
+  mixerRepeatCount?: number;
+  mixerClampWhenFinished?: boolean;
+  mixerAdditive?: boolean;
+}
+
+export interface AnimationScheduleOptions {
+  startInSec?: number;
+  startAtSec?: number;
+  offsetSec?: number;
+  priority?: number;
+  autoPlay?: boolean;
+}
+
+export interface AnimationScheduleEntry {
+  name: string;
+  startsAt: number;
+  offset: number;
+  enabled: boolean;
+}
+
+export interface AnimationAgencyState {
+  snippets: Record<string, NormalizedAnimationSnippet>;
+  order: string[];
+  schedule: Record<string, AnimationScheduleEntry>;
+  globalPlaybackState: 'playing' | 'paused' | 'stopped';
+  eventCount: number;
+  lastUpdatedTime: number | null;
+}
+
+export interface AnimationScheduleSnapshotEntry {
+  name: string;
+  enabled: boolean;
+  startsAt: number;
+  offset: number;
+  localTime: number;
+  duration: number;
+  loop: boolean;
+  priority: number;
+  playbackRate: number;
+  intensityScale: number;
+}
+
+export interface AnimationEffect {
+  op: string;
+  name?: string;
+  snippet?: NormalizedAnimationSnippet;
+  opts?: AnimationScheduleOptions;
+  offsetSec?: number;
+  playbackRate?: number;
+  intensityScale?: number;
+  mixerLoopMode?: AnimationLoopMode;
+  reverse?: boolean;
+  [key: string]: unknown;
+}
+
+export interface AnimationEvent {
+  type: string;
+  timestamp: number;
+  snippetName?: string;
+  state?: 'playing' | 'paused' | 'stopped';
+  isPlaying?: boolean;
+  time?: number;
+  params?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface AnimationAgency {
+  loadFromJSON(data: AnimationSnippet): string;
+  schedule(snippet: AnimationSnippet, opts?: AnimationScheduleOptions): string;
+  updateSnippet(snippet: AnimationSnippet): string;
+  remove(name: string): boolean;
+  play(): boolean;
+  pause(): boolean;
+  stop(): boolean;
+  enable(name: string, on?: boolean): boolean;
+  seek(name: string, offsetSec: number): boolean;
+  setSnippetPlaying(name: string, isPlaying: boolean): boolean;
+  setSnippetTime(name: string, time: number): boolean;
+  setSnippetPlaybackRate(name: string, rate: number): boolean;
+  setSnippetIntensityScale(name: string, scale: number): boolean;
+  setSnippetLoopMode(name: string, mode: AnimationLoopMode): boolean;
+  setSnippetReverse(name: string, reverse: boolean): boolean;
+  getState(): AnimationAgencyState;
+  getScheduleSnapshot(): AnimationScheduleSnapshotEntry[];
+  dispose(): void;
 }
 
 export interface BlinkAgencyState {
@@ -258,6 +437,25 @@ export interface WorkerAgencyClient {
   dispose(): void;
 }
 
+export interface AnimationWorkerClient {
+  loadFromJSON(data: AnimationSnippet): void;
+  schedule(snippet: AnimationSnippet, opts?: AnimationScheduleOptions): void;
+  updateSnippet(snippet: AnimationSnippet): void;
+  remove(name: string): void;
+  play(): void;
+  pause(): void;
+  stop(): void;
+  enable(name: string, on?: boolean): void;
+  seek(name: string, offsetSec: number): void;
+  setSnippetPlaying(name: string, isPlaying: boolean): void;
+  setSnippetTime(name: string, time: number): void;
+  setSnippetPlaybackRate(name: string, rate: number): void;
+  setSnippetIntensityScale(name: string, scale: number): void;
+  setSnippetLoopMode(name: string, mode: AnimationLoopMode): void;
+  setSnippetReverse(name: string, reverse: boolean): void;
+  dispose(): void;
+}
+
 export interface BlinkWorkerClient extends Omit<BlinkAgency, 'getState'> {}
 
 export interface GazeWorkerClient {
@@ -292,14 +490,21 @@ export interface HairWorkerClient {
 }
 
 export interface LatticeworkCljsApi {
+  createAnimationAgency(config?: Partial<AnimationAgencyState>, host?: WorkerAgencyHost): AnimationAgency;
   createBlinkAgency(config?: BlinkAgencyConfig, host?: WorkerAgencyHost): BlinkAgency;
   createGazeAgency(config?: GazeAgencyConfig, host?: WorkerAgencyHost): GazeAgency;
   createHairAgency(config?: HairAgencyConfig, host?: WorkerAgencyHost): HairAgency;
   createAgencyWorkerClient(worker: Worker, host?: WorkerAgencyHost): WorkerAgencyClient;
+  createAnimationWorkerClient(worker: Worker, host?: WorkerAgencyHost): AnimationWorkerClient;
   createBlinkWorkerClient(worker: Worker, host?: WorkerAgencyHost): BlinkWorkerClient;
   createGazeWorkerClient(worker: Worker, host?: WorkerAgencyHost): GazeWorkerClient;
   createHairWorkerClient(worker: Worker, host?: WorkerAgencyHost): HairWorkerClient;
 }
+
+export declare function createAnimationAgency(
+  config?: Partial<AnimationAgencyState>,
+  host?: WorkerAgencyHost,
+): AnimationAgency;
 
 export declare function createBlinkAgency(
   config?: BlinkAgencyConfig,
@@ -320,6 +525,11 @@ export declare function createAgencyWorkerClient(
   worker: Worker,
   host?: WorkerAgencyHost,
 ): WorkerAgencyClient;
+
+export declare function createAnimationWorkerClient(
+  worker: Worker,
+  host?: WorkerAgencyHost,
+): AnimationWorkerClient;
 
 export declare function createBlinkWorkerClient(
   worker: Worker,

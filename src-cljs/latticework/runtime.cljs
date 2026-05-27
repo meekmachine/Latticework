@@ -1,5 +1,6 @@
 (ns latticework.runtime
-  (:require [latticework.blink :as blink]
+  (:require [latticework.animation :as animation]
+            [latticework.blink :as blink]
             [latticework.gaze :as gaze]
             [latticework.hair :as hair]
             [latticework.protocol :as protocol]))
@@ -15,6 +16,66 @@
 (defn- emit-state! [host state]
   (when-let [on-state (fn-prop host "onState")]
     (on-state (protocol/data->js state))))
+
+(defn- call-first! [host names & args]
+  (loop [remaining names]
+    (when-let [name (first remaining)]
+      (if-let [callback (fn-prop host name)]
+        (do (apply callback args) true)
+        (recur (rest remaining))))))
+
+(defn- apply-animation-effect! [host effect]
+  (when-let [on-animation-effect (fn-prop host "onAnimationEffect")]
+    (on-animation-effect (protocol/data->js effect)))
+  (case (:op effect)
+    "scheduleSnippet"
+    (call-first! host
+                 ["scheduleSnippet" "schedule"]
+                 (protocol/data->js (:snippet effect))
+                 (protocol/data->js (:opts effect)))
+
+    "updateSnippet"
+    (call-first! host
+                 ["updateSnippet"]
+                 (protocol/data->js (:snippet effect)))
+
+    "removeSnippet"
+    (call-first! host ["removeSnippet" "remove"] (:name effect))
+
+    "seekSnippet"
+    (call-first! host ["seekSnippet" "seek"] (:name effect) (:offsetSec effect))
+
+    "pauseSnippet"
+    (call-first! host ["pauseSnippet"] (:name effect))
+
+    "resumeSnippet"
+    (call-first! host ["resumeSnippet"] (:name effect))
+
+    "restartSnippet"
+    (call-first! host ["restartSnippet"] (:name effect))
+
+    "playAll"
+    (call-first! host ["play"])
+
+    "pauseAll"
+    (call-first! host ["pause"])
+
+    "stopAll"
+    (call-first! host ["stop"])
+
+    "setSnippetPlaybackRate"
+    (call-first! host ["setSnippetPlaybackRate"] (:name effect) (:playbackRate effect))
+
+    "setSnippetIntensityScale"
+    (call-first! host ["setSnippetIntensityScale"] (:name effect) (:intensityScale effect))
+
+    "setSnippetLoopMode"
+    (call-first! host ["setSnippetLoopMode"] (:name effect) (:mixerLoopMode effect))
+
+    "setSnippetReverse"
+    (call-first! host ["setSnippetReverse"] (:name effect) (:reverse effect))
+
+    nil))
 
 (defn- schedule-cleanup! [host scheduled-name snippet]
   (when (and scheduled-name
@@ -34,17 +95,28 @@
     (emit-state! host (:state output))
 
     "scheduleSnippet"
-    (when-let [schedule-snippet (fn-prop host "scheduleSnippet")]
-      (let [snippet (:snippet output)
-            options (:options output)
-            scheduled-name (schedule-snippet
-                            (protocol/data->js snippet)
-                            (protocol/data->js options))]
-        (schedule-cleanup! host scheduled-name snippet)))
+    (let [snippet (:snippet output)
+          options (:options output)
+          scheduled-name (or
+                          (when-let [schedule-snippet (fn-prop host "scheduleSnippet")]
+                            (schedule-snippet
+                             (protocol/data->js snippet)
+                             (protocol/data->js options)))
+                          (when-let [schedule (fn-prop host "schedule")]
+                            (schedule
+                             (protocol/data->js snippet)
+                             (protocol/data->js options))))]
+      (schedule-cleanup! host scheduled-name snippet))
 
     "removeSnippet"
-    (when-let [remove-snippet (fn-prop host "removeSnippet")]
-      (remove-snippet (:name output)))
+    (call-first! host ["removeSnippet" "remove"] (:name output))
+
+    "animationEffect"
+    (apply-animation-effect! host (:effect output))
+
+    "animationEvent"
+    (when-let [on-animation-event (fn-prop host "onAnimationEvent")]
+      (on-animation-event (protocol/data->js (:event output))))
 
     "applyHairState"
     (if-let [apply-hair-state (fn-prop host "applyHairState")]
@@ -176,6 +248,59 @@
                        (emit! (gaze/stop! state))
                        (reset! disposed true))}))))
 
+(defn create-in-process-animation-agency
+  ([config] (create-in-process-animation-agency config nil))
+  ([config host]
+   (let [state (animation/create-state (protocol/js->data config))
+         host (or host #js {})
+         disposed (atom false)]
+     (letfn [(emit! [command-result]
+               (let [outputs (:outputs command-result)]
+                 (when-not @disposed
+                   (apply-outputs! host outputs))
+                 command-result))]
+       (apply-outputs! host [(protocol/emit-state animation/agency-name (animation/snapshot state))])
+       #js {:loadFromJSON (fn [data]
+                            (:result (emit! (animation/load! state (protocol/js->data data)))))
+            :schedule (fn
+                        ([snippet] (:result (emit! (animation/schedule! state (protocol/js->data snippet) nil))))
+                        ([snippet opts] (:result (emit! (animation/schedule! state
+                                                                             (protocol/js->data snippet)
+                                                                             (protocol/js->data opts))))))
+            :updateSnippet (fn [snippet]
+                             (:result (emit! (animation/update-snippet! state (protocol/js->data snippet)))))
+            :remove (fn [name]
+                      (:result (emit! (animation/remove! state name))))
+            :play (fn []
+                    (:result (emit! (animation/play! state))))
+            :pause (fn []
+                     (:result (emit! (animation/pause! state))))
+            :stop (fn []
+                    (:result (emit! (animation/stop! state))))
+            :enable (fn
+                      ([name] (:result (emit! (animation/enable! state name true))))
+                      ([name on] (:result (emit! (animation/enable! state name on)))))
+            :seek (fn [name offset-sec]
+                    (:result (emit! (animation/seek! state name offset-sec))))
+            :setSnippetPlaying (fn [name is-playing]
+                                  (:result (emit! (animation/set-playing! state name is-playing))))
+            :setSnippetTime (fn [name time]
+                              (:result (emit! (animation/seek! state name time))))
+            :setSnippetPlaybackRate (fn [name rate]
+                                      (:result (emit! (animation/set-playback-rate! state name rate))))
+            :setSnippetIntensityScale (fn [name scale]
+                                        (:result (emit! (animation/set-intensity-scale! state name scale))))
+            :setSnippetLoopMode (fn [name mode]
+                                  (:result (emit! (animation/set-loop-mode! state name mode))))
+            :setSnippetReverse (fn [name reverse]
+                                 (:result (emit! (animation/set-reverse! state name reverse))))
+            :getState (fn []
+                        (protocol/data->js (animation/snapshot state)))
+            :getScheduleSnapshot (fn []
+                                   (protocol/data->js (animation/schedule-snapshot state)))
+            :dispose (fn []
+                       (reset! disposed true))}))))
+
 (defn create-in-process-hair-agency
   ([config] (create-in-process-hair-agency config nil))
   ([config host]
@@ -252,6 +377,43 @@
          :dispose (fn []
                     (reset! disposed true)
                     (.removeEventListener worker "message" handler))}))
+
+(defn create-animation-worker-client [worker host]
+  (let [client (create-worker-client worker host)]
+    #js {:loadFromJSON (fn [data]
+                         (.post client #js {:agency "animation" :type "loadFromJSON" :data data}))
+         :schedule (fn
+                     ([snippet] (.post client #js {:agency "animation" :type "schedule" :snippet snippet}))
+                     ([snippet opts] (.post client #js {:agency "animation" :type "schedule" :snippet snippet :opts opts})))
+         :updateSnippet (fn [snippet]
+                          (.post client #js {:agency "animation" :type "updateSnippet" :snippet snippet}))
+         :remove (fn [name]
+                   (.post client #js {:agency "animation" :type "remove" :name name}))
+         :play (fn []
+                 (.post client #js {:agency "animation" :type "play"}))
+         :pause (fn []
+                  (.post client #js {:agency "animation" :type "pause"}))
+         :stop (fn []
+                 (.post client #js {:agency "animation" :type "stop"}))
+         :enable (fn
+                   ([name] (.post client #js {:agency "animation" :type "enable" :name name :on true}))
+                   ([name on] (.post client #js {:agency "animation" :type "enable" :name name :on on})))
+         :seek (fn [name offset-sec]
+                 (.post client #js {:agency "animation" :type "seek" :name name :offsetSec offset-sec}))
+         :setSnippetPlaying (fn [name is-playing]
+                               (.post client #js {:agency "animation" :type "setSnippetPlaying" :name name :isPlaying is-playing}))
+         :setSnippetTime (fn [name time]
+                           (.post client #js {:agency "animation" :type "setSnippetTime" :name name :time time}))
+         :setSnippetPlaybackRate (fn [name rate]
+                                   (.post client #js {:agency "animation" :type "setSnippetPlaybackRate" :name name :rate rate}))
+         :setSnippetIntensityScale (fn [name scale]
+                                     (.post client #js {:agency "animation" :type "setSnippetIntensityScale" :name name :scale scale}))
+         :setSnippetLoopMode (fn [name mode]
+                               (.post client #js {:agency "animation" :type "setSnippetLoopMode" :name name :mode mode}))
+         :setSnippetReverse (fn [name reverse]
+                              (.post client #js {:agency "animation" :type "setSnippetReverse" :name name :reverse reverse}))
+         :dispose (fn []
+                    (.dispose client))}))
 
 (defn create-blink-worker-client [worker host]
   (let [client (create-worker-client worker host)]

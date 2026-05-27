@@ -1,9 +1,11 @@
 (ns latticework.worker
-  (:require [latticework.blink :as blink]
+  (:require [latticework.animation :as animation]
+            [latticework.blink :as blink]
             [latticework.gaze :as gaze]
             [latticework.hair :as hair]
             [latticework.protocol :as protocol]))
 
+(defonce animation-state (animation/create-state))
 (defonce blink-state (blink/create-state))
 (defonce blink-auto-timer (atom nil))
 (defonce gaze-state (gaze/create-state))
@@ -43,6 +45,7 @@
 
 (defn- dispatch! [command]
   (case (:agency command)
+    "animation" (animation/handle-command! animation-state command)
     "blink" (let [outputs (blink/handle-command! blink-state command)]
               (when (blink/auto-command? command)
                 (sync-blink-auto!))
@@ -59,6 +62,7 @@
 
 (defn init []
   (.addEventListener js/self "message" handle-message!)
+  (post-output! (protocol/emit-state animation/agency-name (animation/snapshot animation-state)))
   (post-output! (protocol/emit-state blink/agency-name (blink/snapshot blink-state)))
   (post-output! (protocol/emit-state gaze/agency-name (gaze/snapshot gaze-state)))
   (post-output! (protocol/emit-state hair/agency-name (hair/snapshot hair-state)))
