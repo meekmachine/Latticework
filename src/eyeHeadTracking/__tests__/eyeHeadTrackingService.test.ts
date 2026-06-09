@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createEyeHeadTrackingService } from '../eyeHeadTrackingService';
 
 class FakeControls {
@@ -25,6 +25,26 @@ class FakeControls {
   emitChange(): void {
     this.listeners.forEach((listener) => listener());
   }
+}
+
+class FakeWindow {
+  innerWidth = 800;
+  innerHeight = 600;
+  private listeners = new Map<string, Set<EventListener>>();
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? new Set<EventListener>();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+}
+
+function stubBrowserWindow(): void {
+  vi.stubGlobal('window', new FakeWindow());
 }
 
 function createHarness(config: {
@@ -106,12 +126,32 @@ function clearAnimationAgencyMocks(animationAgency: ReturnType<typeof createAnim
 }
 
 describe('EyeHeadTrackingService camera-relative gaze', () => {
-  it('waits until tracking starts before computing the camera-relative offset', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('does not compute the camera-relative offset when started in manual mode', () => {
     const harness = createHarness();
 
     expect(harness.getModel).not.toHaveBeenCalled();
     expect(harness.controls.listenerCount()).toBe(0);
 
+    harness.service.start();
+
+    expect(harness.getModel).not.toHaveBeenCalled();
+    expect(harness.controls.listenerCount()).toBe(0);
+
+    harness.service.dispose();
+  });
+
+  it('waits until live tracking starts before computing the camera-relative offset', () => {
+    stubBrowserWindow();
+    const harness = createHarness();
+
+    expect(harness.getModel).not.toHaveBeenCalled();
+    expect(harness.controls.listenerCount()).toBe(0);
+
+    harness.service.setMode('mouse');
     harness.service.start();
 
     expect(harness.getModel).toHaveBeenCalledTimes(1);
@@ -121,7 +161,9 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
   });
 
   it('reuses the cached camera-relative offset until the camera changes', () => {
+    stubBrowserWindow();
     const harness = createHarness();
+    harness.service.setMode('mouse');
     harness.service.start();
 
     harness.getModel.mockClear();
@@ -167,10 +209,35 @@ describe('EyeHeadTrackingService camera-relative gaze', () => {
     harness.service.dispose();
   });
 
+  it('unsubscribes from camera changes when switching back to manual mode', () => {
+    stubBrowserWindow();
+    const harness = createHarness();
+    harness.service.setMode('mouse');
+    harness.service.start();
+
+    expect(harness.controls.listenerCount()).toBe(1);
+
+    harness.service.setMode('manual');
+
+    expect(harness.controls.listenerCount()).toBe(0);
+    harness.getModel.mockClear();
+    harness.engine.transitionContinuum.mockClear();
+
+    harness.camera.position.set(3, 1, 3);
+    harness.controls.emitChange();
+
+    expect(harness.getModel).not.toHaveBeenCalled();
+    expect(harness.engine.transitionContinuum).not.toHaveBeenCalled();
+
+    harness.service.dispose();
+  });
+
   it('applies the shared camera-relative offset in experimental gaze mode', () => {
+    stubBrowserWindow();
     const harness = createHarness({
       gazeMode: 'experimental',
     });
+    harness.service.setMode('mouse');
     harness.service.start();
 
     harness.engine.transitionContinuum.mockClear();

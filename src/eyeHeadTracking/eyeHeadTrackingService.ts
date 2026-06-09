@@ -15,6 +15,7 @@ import { EyeHeadTrackingScheduler, type EyeHeadHostCaps } from './eyeHeadTrackin
 import { GazeService, type GazeRuntime, type GazeRuntimeCommand, type GazeRuntimeResetOptions } from '../gaze';
 import {
   CameraRelativeGazeTracker,
+  computeCameraRelativeGazeOffset,
   computeCharacterRelativePointerTarget,
   type CameraRelativeGazeController,
 } from '../camera/cameraRelativeGaze';
@@ -587,6 +588,7 @@ export class EyeHeadTrackingService {
     this.trackingMode = mode;
     this.machine?.send({ type: 'SET_MODE', mode });
     this.gazeService?.setMode(mode);
+    this.cameraRelativeGazeTracker?.setEnabled(this.isCameraTrackingActive());
 
     // Setup new mode
     if (mode === 'mouse') {
@@ -843,11 +845,15 @@ export class EyeHeadTrackingService {
   }
 
   private isCameraTrackingActive(): boolean {
-    return this.isStarted && this.isTrackingEnabled();
+    return this.isStarted && this.isLiveTrackingMode() && this.isTrackingEnabled();
   }
 
   private isTrackingEnabled(): boolean {
     return Boolean(this.config.eyeTrackingEnabled || this.config.headTrackingEnabled);
+  }
+
+  private isLiveTrackingMode(): boolean {
+    return this.trackingMode === 'mouse' || this.trackingMode === 'webcam';
   }
 
   private getCameraController(): CameraRelativeGazeController | null {
@@ -858,8 +864,26 @@ export class EyeHeadTrackingService {
     return this.cameraRelativeGazeTracker?.getOffset() ?? { x: 0, y: 0 };
   }
 
+  private computeCameraRelativeOffsetOnce(): { x: number; y: number } {
+    const controller = this.getCameraController();
+    if (!controller) {
+      return { x: 0, y: 0 };
+    }
+
+    return computeCameraRelativeGazeOffset(
+      controller.getModel?.() ?? null,
+      controller.camera.position,
+      controller.controls.target
+    );
+  }
+
   private applyCameraRelativeOffsetForCurrentTarget(options: { force?: boolean } = {}): void {
-    if (!this.isStarted || !this.isTrackingEnabled()) {
+    const force = !!options.force;
+    if (force) {
+      if (!this.isStarted || !this.isTrackingEnabled()) {
+        return;
+      }
+    } else if (!this.isCameraTrackingActive()) {
       return;
     }
 
@@ -868,6 +892,9 @@ export class EyeHeadTrackingService {
       applyHead: this.config.headTrackingEnabled,
       skipMachine: this.trackingMode !== 'manual',
       force: options.force,
+      cameraOffset: this.isCameraTrackingActive()
+        ? undefined
+        : this.computeCameraRelativeOffsetOnce(),
     });
   }
 
@@ -888,7 +915,7 @@ export class EyeHeadTrackingService {
     this.cameraRelativeGazeTracker = new CameraRelativeGazeTracker(controller, {
       enabled: false,
       onChange: () => {
-        if (!this.isStarted || !this.isTrackingEnabled()) {
+        if (!this.isCameraTrackingActive()) {
           return;
         }
 
@@ -967,7 +994,13 @@ export class EyeHeadTrackingService {
    */
   private applyGazeToCharacter(
     target: GazeTarget,
-    options?: { applyEyes?: boolean; applyHead?: boolean; skipMachine?: boolean; force?: boolean }
+    options?: {
+      applyEyes?: boolean;
+      applyHead?: boolean;
+      skipMachine?: boolean;
+      force?: boolean;
+      cameraOffset?: { x: number; y: number };
+    }
   ): void {
     // Early return if both eye and head tracking are disabled (already checked in setGazeTarget, but double-check)
     if (!this.config.eyeTrackingEnabled && !this.config.headTrackingEnabled) {
@@ -977,7 +1010,7 @@ export class EyeHeadTrackingService {
     const eyeIntensity = this.config.eyeIntensity ?? 1.0;
     const headIntensity = this.config.headIntensity ?? 0.5;
 
-    const cameraOffset = this.getCameraRelativeOffset();
+    const cameraOffset = options?.cameraOffset ?? this.getCameraRelativeOffset();
     const adjustedTarget = {
       x: target.x + cameraOffset.x,
       y: target.y + cameraOffset.y,
