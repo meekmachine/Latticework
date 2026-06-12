@@ -8,3 +8,9 @@
 - Stage only the intended files, commit the scoped change, push the branch, and open a draft pull request.
 - Run the most relevant available checks before opening the pull request, and mention any checks that could not be run.
 - Do not overwrite, reset, or include unrelated local/user changes from other worktrees.
+
+## Package Boundary Discipline
+
+- Do not patch consumer apps with Latticework runtime shims, copied services, or compatibility stand-ins for runtime APIs.
+- If Latticework fails in a consuming bundler or framework, fix the source/build/export surface in this package and then update the consumer dependency pin.
+- For temporary local verification, link or install a built package artifact only; do not commit consumer-local copies of package runtime behavior.

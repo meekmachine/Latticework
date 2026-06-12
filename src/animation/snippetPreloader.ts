@@ -1,11 +1,15 @@
 /**
- * Bundled snippets stay grouped by category for UI discovery, but their JSON is
- * loaded lazily only when selected. localStorage is reserved for user-authored
- * snippets and legacy compatibility filtering.
+ * Bundled snippets stay grouped by category for UI discovery behind an async
+ * loader-shaped catalog. localStorage is reserved for user-authored snippets
+ * and legacy compatibility filtering.
  */
 
+import {
+  bundledSnippetModules,
+  type BundledSnippetModuleLoader,
+} from './bundledSnippetModules';
+
 type SnippetModule = { default?: unknown } | unknown;
-type SnippetModuleLoader = () => Promise<SnippetModule>;
 type SnippetStorageLike = Pick<Storage, 'getItem' | 'removeItem'>;
 type SnippetData = Record<string, unknown>;
 
@@ -17,12 +21,12 @@ export type SnippetCategoryKey =
 
 interface SnippetCategory {
   listKey: SnippetCategoryKey;
-  modules: Record<string, SnippetModuleLoader>;
+  modules: Record<string, BundledSnippetModuleLoader>;
 }
 
 interface BundledSnippetEntry {
   name: string;
-  load: SnippetModuleLoader;
+  load: BundledSnippetModuleLoader;
 }
 
 interface BundledSnippetCategory extends SnippetCategory {
@@ -41,17 +45,23 @@ export interface ResolvedSnippetEntry {
 const BUNDLED_SNIPPET_VERSION_KEY = 'bundledAnimationSnippetsVersion';
 const BUNDLED_SNIPPET_MANIFEST_KEY = 'bundledAnimationSnippetsManifest';
 
-// Keep these lazy so bundled snippet JSON is only loaded when selected.
-const emotionSnippets = import.meta.glob('./snippets/emotion/*.json') as Record<string, SnippetModuleLoader>;
-const speakingSnippets = import.meta.glob('./snippets/speaking/*.json') as Record<string, SnippetModuleLoader>;
-const visemeSnippets = import.meta.glob('./snippets/visemes/*.json') as Record<string, SnippetModuleLoader>;
-const eyeHeadTrackingSnippets = import.meta.glob('./snippets/eyeHeadTracking/*.json') as Record<string, SnippetModuleLoader>;
-
 const CATEGORIES: SnippetCategory[] = [
-  { listKey: 'emotionAnimationsList', modules: emotionSnippets },
-  { listKey: 'speakingAnimationsList', modules: speakingSnippets },
-  { listKey: 'visemeAnimationsList', modules: visemeSnippets },
-  { listKey: 'eyeHeadTrackingAnimationsList', modules: eyeHeadTrackingSnippets },
+  {
+    listKey: 'emotionAnimationsList',
+    modules: bundledSnippetModules.emotionAnimationsList,
+  },
+  {
+    listKey: 'speakingAnimationsList',
+    modules: bundledSnippetModules.speakingAnimationsList,
+  },
+  {
+    listKey: 'visemeAnimationsList',
+    modules: bundledSnippetModules.visemeAnimationsList,
+  },
+  {
+    listKey: 'eyeHeadTrackingAnimationsList',
+    modules: bundledSnippetModules.eyeHeadTrackingAnimationsList,
+  },
 ];
 
 function extractName(filePath: string): string {
