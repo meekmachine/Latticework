@@ -30,6 +30,10 @@ export interface GazeTarget {
 }
 
 export interface EyeHeadTrackingConfig {
+  /**
+   * Deprecated compatibility flag. Gaze now always routes through the modern
+   * GazeService runtime path; legacy values are accepted but ignored.
+   */
   gazeMode?: 'engine' | 'legacy' | 'experimental';
   // Eye tracking settings
   eyeTrackingEnabled?: boolean;
@@ -56,7 +60,7 @@ export interface EyeHeadTrackingConfig {
   engine?: any; // EngineThree for applying gaze directly
   cameraController?: any; // DPthreeCameraController for camera-relative gaze offsets
   animationAgency?: any; // Animation agency for scheduling approach
-  useAnimationAgency?: boolean; // Toggle: true = use animation agency, false = use direct engine calls
+  useAnimationAgency?: boolean; // Deprecated: animation agency is used when provided; engine remains fallback
   agencyTransitionDuration?: number; // Duration for animation agency transitions (ms)
 
   // Coordination with mouth
@@ -132,7 +136,7 @@ export const DEFAULT_ANIMATION_KEYS = {
  * Default configuration values
  */
 export const DEFAULT_EYE_HEAD_CONFIG = {
-  gazeMode: 'engine' as const,
+  gazeMode: 'experimental' as const,
   // Eye settings
   eyeTrackingEnabled: false, // Disabled by default
   eyeSaccadeSpeed: 0.7,
@@ -170,9 +174,9 @@ export const DEFAULT_EYE_HEAD_CONFIG = {
   returnToNeutralDuration: 800, // 800ms for graceful return
 
   // Animation backend
-  // Direct engine calls (transitionContinuum) are better for real-time tracking
-  // Animation agency clips aren't designed for high-frequency updates
-  useAnimationAgency: false,
+  // Gaze always routes through GazeService. The animation agency is preferred
+  // when present so gaze can blend with other snippets; the engine is fallback.
+  useAnimationAgency: true,
   agencyTransitionDuration: 300, // 300ms for smooth animation agency transitions
 };
 

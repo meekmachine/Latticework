@@ -20,6 +20,9 @@ export interface EyeHeadHostCaps {
   pauseSnippet?: (name: string) => void;
   resumeSnippet?: (name: string) => void;
   restartSnippet?: (name: string) => void;
+  setSnippetPlaybackRate?: (name: string, rate: number) => void;
+  setSnippetIntensityScale?: (name: string, scale: number) => void;
+  setSnippetReverse?: (name: string, reverse: boolean) => void;
   removeSnippet: (name: string) => void;
   onSnippetEnd?: (name: string) => void;
 }
@@ -40,6 +43,39 @@ const DEFAULT_TRANSITION_CONFIG: GazeTransitionConfig = {
   headPriority: 15,
 };
 
+const EYE_SNIPPET_NAMES = [
+  'eyeHeadTracking/eyeYaw',
+  'eyeHeadTracking/eyePitch',
+] as const;
+
+const HEAD_SNIPPET_NAMES = [
+  'eyeHeadTracking/headYaw',
+  'eyeHeadTracking/headPitch',
+  'eyeHeadTracking/headRoll',
+] as const;
+
+type AxisSpec = {
+  name: typeof EYE_SNIPPET_NAMES[number] | typeof HEAD_SNIPPET_NAMES[number];
+  negativeAU: string;
+  positiveAU: string;
+  priority: number;
+};
+
+type AxisState = {
+  currentTime: number;
+  targetTime: number;
+  lastUpdatedAt: number;
+  playbackRate: number;
+  direction: 1 | -1;
+  timer: ReturnType<typeof globalThis.setTimeout> | null;
+};
+
+const CONTROL_CLIP_DURATION_SEC = 1;
+const NEUTRAL_TIME_SEC = 0.5;
+const MIN_TRAVEL_TIME_SEC = 0.016;
+const MIN_PLAYBACK_RATE = 0.001;
+const TARGET_EPSILON = 0.001;
+
 // ARKit AU IDs for eye and head movements
 export const EYE_HEAD_AUS = {
   // Eye AUs
@@ -57,20 +93,11 @@ export const EYE_HEAD_AUS = {
   HEAD_ROLL_RIGHT: '56', // Tilt right
 } as const;
 
-/**
- * Easing function for smooth, natural transitions
- * Uses ease-in-out cubic for human-like deceleration
- */
-function easeInOutCubic(t: number): number {
-  return t < 0.5
-    ? 4 * t * t * t
-    : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
-
 export class EyeHeadTrackingScheduler {
   private host: EyeHeadHostCaps;
   private transitionConfig: GazeTransitionConfig;
   private scheduled = new Set<string>();
+  private axisStates = new Map<string, AxisState>();
 
   constructor(host: EyeHeadHostCaps, transitionConfig?: Partial<GazeTransitionConfig>) {
     this.host = host;
@@ -121,14 +148,12 @@ export class EyeHeadTrackingScheduler {
 
     const { x: targetX, y: targetY, z: targetZ = 0 } = target;
     const { eyeIntensity, headIntensity, eyePriority, headPriority } = this.transitionConfig;
-    const eyeDurationSec = Math.max(0.001, eyeDuration) / 1000;
-    const headDurationSec = Math.max(0.001, headDuration) / 1000;
 
     let scheduled = false;
 
     // Schedule eye movements using continuum snippets
     if (eyeEnabled) {
-      scheduled = this.scheduleEyeContinuum(targetX, targetY, eyeIntensity, eyeDurationSec, eyePriority) || scheduled;
+      scheduled = this.scheduleEyeContinuum(targetX, targetY, eyeIntensity, eyeDuration, eyePriority) || scheduled;
     }
 
     // Schedule head movements using continuum snippets (yaw, pitch, and roll)
@@ -138,7 +163,7 @@ export class EyeHeadTrackingScheduler {
         targetY,
         headRoll,
         headIntensity,
-        headDurationSec,
+        headDuration,
         headPriority
       ) || scheduled;
     }
@@ -153,54 +178,28 @@ export class EyeHeadTrackingScheduler {
     x: number,
     y: number,
     intensity: number,
-    duration: number,
+    durationMs: number,
     priority: number
   ): boolean {
     // Yaw (horizontal): Input x already has correct sign from mouse tracking.
     // x is in viewer space: positive = character should look toward viewer's left (AU 62)
     // No additional inversion needed here - the mouse tracking handles it.
     // Value in -1 to +1 range (like blink scheduler uses 0-1)
-    const yaw = x * intensity;
-    const yawCurves = this.buildContinuumCurves(
-      EYE_HEAD_AUS.EYE_YAW_LEFT,
-      EYE_HEAD_AUS.EYE_YAW_RIGHT,
-      yaw,
-      duration
-    );
-
-    const yawOk = this.upsertSnippet({
+    const yawOk = this.driveAxis({
       name: 'eyeHeadTracking/eyeYaw',
-      curves: yawCurves,
-      maxTime: duration,
-      loop: false,
-      mixerClampWhenFinished: true,
-      snippetCategory: 'eyeHeadTracking',
-      snippetPriority: priority,
-      snippetPlaybackRate: 1.0,
-      snippetIntensityScale: 1.0,
-    });
+      negativeAU: EYE_HEAD_AUS.EYE_YAW_LEFT,
+      positiveAU: EYE_HEAD_AUS.EYE_YAW_RIGHT,
+      priority,
+    }, x, intensity, durationMs);
 
     // Pitch (vertical): -1 (down/AU 64) to +1 (up/AU 63)
     // Value in -1 to +1 range
-    const pitch = y * intensity;
-    const pitchCurves = this.buildContinuumCurves(
-      EYE_HEAD_AUS.EYE_PITCH_DOWN,
-      EYE_HEAD_AUS.EYE_PITCH_UP,
-      pitch,
-      duration
-    );
-
-    const pitchOk = this.upsertSnippet({
+    const pitchOk = this.driveAxis({
       name: 'eyeHeadTracking/eyePitch',
-      curves: pitchCurves,
-      maxTime: duration,
-      loop: false,
-      mixerClampWhenFinished: true,
-      snippetCategory: 'eyeHeadTracking',
-      snippetPriority: priority,
-      snippetPlaybackRate: 1.0,
-      snippetIntensityScale: 1.0,
-    });
+      negativeAU: EYE_HEAD_AUS.EYE_PITCH_DOWN,
+      positiveAU: EYE_HEAD_AUS.EYE_PITCH_UP,
+      priority,
+    }, y, intensity, durationMs);
 
     return yawOk || pitchOk;
   }
@@ -213,169 +212,231 @@ export class EyeHeadTrackingScheduler {
     y: number,
     roll: number,
     intensity: number,
-    duration: number,
+    durationMs: number,
     priority: number
   ): boolean {
     // Yaw (horizontal): Input x already has correct sign from mouse tracking.
     // x is in viewer space: positive = character should look toward viewer's left (AU 52)
     // No additional inversion needed here - the mouse tracking handles it.
     // Value in -1 to +1 range
-    const yaw = x * intensity;
-    const yawCurves = this.buildContinuumCurves(
-      EYE_HEAD_AUS.HEAD_YAW_LEFT,
-      EYE_HEAD_AUS.HEAD_YAW_RIGHT,
-      yaw,
-      duration
-    );
-
-    const yawOk = this.upsertSnippet({
+    const yawOk = this.driveAxis({
       name: 'eyeHeadTracking/headYaw',
-      curves: yawCurves,
-      maxTime: duration,
-      loop: false,
-      mixerClampWhenFinished: true,
-      snippetCategory: 'eyeHeadTracking',
-      snippetPriority: priority,
-      snippetPlaybackRate: 1.0,
-      snippetIntensityScale: 1.0,
-    });
+      negativeAU: EYE_HEAD_AUS.HEAD_YAW_LEFT,
+      positiveAU: EYE_HEAD_AUS.HEAD_YAW_RIGHT,
+      priority,
+    }, x, intensity, durationMs);
 
     // Pitch (vertical): -1 (down/AU 54) to +1 (up/AU 53)
     // Value in -1 to +1 range
-    const pitch = y * intensity;
-    const pitchCurves = this.buildContinuumCurves(
-      EYE_HEAD_AUS.HEAD_PITCH_DOWN,
-      EYE_HEAD_AUS.HEAD_PITCH_UP,
-      pitch,
-      duration
-    );
-
-    const pitchOk = this.upsertSnippet({
+    const pitchOk = this.driveAxis({
       name: 'eyeHeadTracking/headPitch',
-      curves: pitchCurves,
-      maxTime: duration,
-      loop: false,
-      mixerClampWhenFinished: true,
-      snippetCategory: 'eyeHeadTracking',
-      snippetPriority: priority,
-      snippetPlaybackRate: 1.0,
-      snippetIntensityScale: 1.0,
-    });
+      negativeAU: EYE_HEAD_AUS.HEAD_PITCH_DOWN,
+      positiveAU: EYE_HEAD_AUS.HEAD_PITCH_UP,
+      priority,
+    }, y, intensity, durationMs);
 
     // Roll (tilt): -1 (left/AU 55) to +1 (right/AU 56)
     // Value in -1 to +1 range
-    const rollValue = roll * intensity;
-    const rollCurves = this.buildContinuumCurves(
-      EYE_HEAD_AUS.HEAD_ROLL_LEFT,
-      EYE_HEAD_AUS.HEAD_ROLL_RIGHT,
-      rollValue,
-      duration
-    );
-
-    const rollOk = this.upsertSnippet({
+    const rollOk = this.driveAxis({
       name: 'eyeHeadTracking/headRoll',
-      curves: rollCurves,
-      maxTime: duration,
-      loop: false,
-      mixerClampWhenFinished: true,
-      snippetCategory: 'eyeHeadTracking',
-      snippetPriority: priority,
-      snippetPlaybackRate: 1.0,
-      snippetIntensityScale: 1.0,
-    });
+      negativeAU: EYE_HEAD_AUS.HEAD_ROLL_LEFT,
+      positiveAU: EYE_HEAD_AUS.HEAD_ROLL_RIGHT,
+      priority,
+    }, roll, intensity, durationMs);
 
     return yawOk || pitchOk || rollOk;
   }
 
-  /**
-   * Schedule a snippet. Always schedules fresh - the mixer's crossfade handles
-   * smooth transitions from the previous value to the new target.
-   * Returns true if the snippet is active after this call.
-   */
-  private upsertSnippet(snippet: any): boolean {
-    const name = snippet?.name || '';
+  private driveAxis(
+    spec: AxisSpec,
+    rawValue: number,
+    intensity: number,
+    durationMs: number
+  ): boolean {
+    const name = spec.name;
+    if (!this.ensureAxisSnippet(spec)) {
+      return false;
+    }
+
+    const nextIntensity = Math.max(0, Number.isFinite(intensity) ? intensity : 1);
+    this.host.setSnippetIntensityScale?.(name, nextIntensity);
+
+    const currentTime = this.getEstimatedAxisTime(name);
+    const targetTime = this.valueToControlTime(rawValue);
+    const delta = targetTime - currentTime;
+    const distance = Math.abs(delta);
+    const now = this.now();
+    const state = this.getAxisState(name, now);
+
+    this.clearAxisTimer(name);
+
+    if (distance <= TARGET_EPSILON) {
+      this.host.seekSnippet?.(name, targetTime);
+      this.host.pauseSnippet?.(name);
+      state.currentTime = targetTime;
+      state.targetTime = targetTime;
+      state.lastUpdatedAt = now;
+      state.playbackRate = 0;
+      state.direction = delta < 0 ? -1 : 1;
+      return true;
+    }
+
+    const travelSec = Math.max(MIN_TRAVEL_TIME_SEC, durationMs / 1000);
+    const direction: 1 | -1 = delta < 0 ? -1 : 1;
+    const playbackRate = Math.max(MIN_PLAYBACK_RATE, distance / travelSec);
+
+    state.currentTime = currentTime;
+    state.targetTime = targetTime;
+    state.lastUpdatedAt = now;
+    state.playbackRate = playbackRate;
+    state.direction = direction;
+
+    this.host.seekSnippet?.(name, currentTime);
+    this.host.setSnippetReverse?.(name, direction < 0);
+    this.host.setSnippetPlaybackRate?.(name, playbackRate);
+    this.host.resumeSnippet?.(name);
+
+    state.timer = globalThis.setTimeout(() => {
+      this.host.seekSnippet?.(name, targetTime);
+      this.host.pauseSnippet?.(name);
+      state.currentTime = targetTime;
+      state.targetTime = targetTime;
+      state.lastUpdatedAt = this.now();
+      state.playbackRate = 0;
+    }, Math.ceil(travelSec * 1000));
+
+    return true;
+  }
+
+  private ensureAxisSnippet(spec: AxisSpec): boolean {
+    const name = spec.name;
+    if (this.scheduled.has(name)) {
+      return true;
+    }
 
     try {
-      // Remove existing snippet first to ensure clean transition
-      if (this.scheduled.has(name)) {
-        this.host.removeSnippet(name);
-        this.scheduled.delete(name);
+      const scheduledName = this.host.scheduleSnippet(this.buildControlSnippet(spec));
+      if (!scheduledName) {
+        return false;
       }
 
-      // Schedule new snippet - mixer crossfade handles the transition
-      const scheduledName = this.host.scheduleSnippet(snippet) ?? name;
-      if (scheduledName) {
-        this.scheduled.add(scheduledName);
-        this.host.resumeSnippet?.(scheduledName);
-        return true;
-      }
+      this.scheduled.add(name);
+      this.getAxisState(name, this.now());
+      this.host.seekSnippet?.(name, NEUTRAL_TIME_SEC);
+      this.host.pauseSnippet?.(name);
+      return true;
     } catch {
-      // Scheduling failed
+      return false;
     }
-
-    return false;
   }
 
-  /**
-   * Build continuum curves for a bidirectional axis
-   * Value: negative values use negativeAU, positive values use positiveAU
-   * This matches the continuum slider behavior
-   *
-   * Uses a SINGLE keyframe at the target position. The mixer's crossfade
-   * handles smooth blending from current to target. This avoids the reset-to-zero
-   * issue that occurs with two-keyframe animations that start at 0.
-   */
-  private buildContinuumCurves(
+  private buildControlSnippet(spec: AxisSpec): any {
+    return {
+      name: spec.name,
+      curves: this.buildControlCurves(spec.negativeAU, spec.positiveAU),
+      maxTime: CONTROL_CLIP_DURATION_SEC,
+      loop: false,
+      mixerClampWhenFinished: true,
+      snippetCategory: 'eyeHeadTracking',
+      snippetPriority: spec.priority,
+      snippetPlaybackRate: 1.0,
+      snippetIntensityScale: 1.0,
+      currentTime: NEUTRAL_TIME_SEC,
+    };
+  }
+
+  private buildControlCurves(
     negativeAU: string,
-    positiveAU: string,
-    value: number,
-    duration: number
-  ): Record<string, Array<{ time: number; intensity: number; inherit?: boolean }>> {
-    const curves: Record<string, Array<{ time: number; intensity: number; inherit?: boolean }>> = {};
-    const endTime = Math.max(0.001, duration);
-
-    // Start from the current AU values and animate to the requested target.
-    // The runtime resolves the inherited first keyframe against the live pose,
-    // which removes the slow asymptotic chase in experimental scheduler mode.
-    if (value < 0) {
-      curves[negativeAU] = [
-        { time: 0, intensity: 0, inherit: true },
-        { time: endTime, intensity: Math.abs(value) }
-      ];
-      curves[positiveAU] = [
-        { time: 0, intensity: 0, inherit: true },
-        { time: endTime, intensity: 0 }
-      ];
-    } else {
-      curves[negativeAU] = [
-        { time: 0, intensity: 0, inherit: true },
-        { time: endTime, intensity: 0 }
-      ];
-      curves[positiveAU] = [
-        { time: 0, intensity: 0, inherit: true },
-        { time: endTime, intensity: value }
-      ];
-    }
-
-    return curves;
+    positiveAU: string
+  ): Record<string, Array<{ time: number; intensity: number }>> {
+    return {
+      [negativeAU]: [
+        { time: 0, intensity: 1 },
+        { time: NEUTRAL_TIME_SEC, intensity: 0 },
+        { time: CONTROL_CLIP_DURATION_SEC, intensity: 0 },
+      ],
+      [positiveAU]: [
+        { time: 0, intensity: 0 },
+        { time: NEUTRAL_TIME_SEC, intensity: 0 },
+        { time: CONTROL_CLIP_DURATION_SEC, intensity: 1 },
+      ],
+    };
   }
 
+  private valueToControlTime(value: number): number {
+    const clamped = Math.max(-1, Math.min(1, Number.isFinite(value) ? value : 0));
+    return NEUTRAL_TIME_SEC + clamped * NEUTRAL_TIME_SEC;
+  }
+
+  private getEstimatedAxisTime(name: string): number {
+    const now = this.now();
+    const state = this.getAxisState(name, now);
+    if (state.playbackRate <= 0 || state.currentTime === state.targetTime) {
+      return state.currentTime;
+    }
+
+    const elapsedSec = Math.max(0, (now - state.lastUpdatedAt) / 1000);
+    const estimated = state.currentTime + elapsedSec * state.playbackRate * state.direction;
+    const reachedTarget = state.direction > 0
+      ? estimated >= state.targetTime
+      : estimated <= state.targetTime;
+
+    if (reachedTarget) {
+      state.currentTime = state.targetTime;
+      state.lastUpdatedAt = now;
+      state.playbackRate = 0;
+      return state.targetTime;
+    }
+
+    return Math.max(0, Math.min(CONTROL_CLIP_DURATION_SEC, estimated));
+  }
+
+  private getAxisState(name: string, now: number): AxisState {
+    let state = this.axisStates.get(name);
+    if (!state) {
+      state = {
+        currentTime: NEUTRAL_TIME_SEC,
+        targetTime: NEUTRAL_TIME_SEC,
+        lastUpdatedAt: now,
+        playbackRate: 0,
+        direction: 1,
+        timer: null,
+      };
+      this.axisStates.set(name, state);
+    }
+    return state;
+  }
+
+  private clearAxisTimer(name: string): void {
+    const state = this.axisStates.get(name);
+    if (state?.timer) {
+      globalThis.clearTimeout(state.timer);
+      state.timer = null;
+    }
+  }
+
+  private now(): number {
+    return typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
+  }
 
   /**
    * Stop and remove all tracking snippets
    */
   public stop(): void {
-    // Remove eye tracking snippets
-    this.host.removeSnippet('eyeHeadTracking/eyeYaw');
-    this.host.removeSnippet('eyeHeadTracking/eyePitch');
-
-    // Remove head tracking snippets
-    this.host.removeSnippet('eyeHeadTracking/headYaw');
-    this.host.removeSnippet('eyeHeadTracking/headPitch');
-    this.host.removeSnippet('eyeHeadTracking/headRoll');
-    this.scheduled.clear();
+    this.stopEyes();
+    this.stopHead();
 
     // Stopped - removed all gaze tracking snippets
+  }
+
+  public stopEyes(): void {
+    this.removeSnippets(EYE_SNIPPET_NAMES);
+  }
+
+  public stopHead(): void {
+    this.removeSnippets(HEAD_SNIPPET_NAMES);
   }
 
   public pause(): void {
@@ -403,8 +464,28 @@ export class EyeHeadTrackingScheduler {
   /**
    * Reset gaze to center (neutral position)
    */
-  public resetToNeutral(duration: number = 300): void {
-    this.scheduleGazeTransition({ x: 0, y: 0, z: 0 }, { duration });
+  public resetToNeutral(
+    duration: number = 300,
+    options?: {
+      eyeEnabled?: boolean;
+      headEnabled?: boolean;
+      headFollowEyes?: boolean;
+    }
+  ): boolean {
+    const {
+      eyeEnabled = true,
+      headEnabled = true,
+      headFollowEyes = true,
+    } = options || {};
+
+    if (!eyeEnabled && !headEnabled) {
+      return false;
+    }
+
+    return this.scheduleGazeTransition(
+      { x: 0, y: 0, z: 0 },
+      { duration, eyeEnabled, headEnabled, headFollowEyes }
+    );
   }
 
   /**
@@ -412,5 +493,14 @@ export class EyeHeadTrackingScheduler {
    */
   public dispose(): void {
     this.stop();
+  }
+
+  private removeSnippets(names: readonly string[]): void {
+    names.forEach((name) => {
+      this.clearAxisTimer(name);
+      this.host.removeSnippet(name);
+      this.scheduled.delete(name);
+      this.axisStates.delete(name);
+    });
   }
 }
