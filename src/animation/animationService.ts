@@ -380,7 +380,7 @@ function clampTime(time: number, duration: number) {
 /**
  * Animation Service
  *
- * This service uses Loom3 clip handles as the runtime source of truth and
+ * This service uses Embody clip handles as the runtime source of truth and
  * keeps only snippet metadata and UI state locally.
  */
 export function createAnimationService(host: Engine) {
@@ -591,7 +591,7 @@ export function createAnimationService(host: Engine) {
 
     if (!subscribeToClipEvents(snippetName, runner, handle)) {
       console.error(
-        `[animationService] Loom3 clip event streams are required for "${snippetName}". Link the Loom3 stream runtime branch or upgrade the dependency.`,
+        `[animationService] Embody clip event streams are required for "${snippetName}". Link the Embody stream runtime branch or upgrade the dependency.`,
       );
       snippet.isPlaying = false;
       animationEventEmitter.emitPlayStateChanged(snippetName, false);
@@ -1580,7 +1580,7 @@ function bakedChannelsEqual(a: BakedAnimationUIState['channels'], b: BakedAnimat
  * - Parameters change (rate, intensity, loop mode)
  *
  * React hooks subscribe to events and read the service-owned UI state on demand.
- * Runtime playback stays in Loom3; these events are frontend notifications.
+ * Runtime playback stays in Embody; these events are frontend notifications.
  */
 class AnimationEventEmitter {
   private event$ = new Subject<AnimationEvent>();

@@ -181,7 +181,7 @@ describe('buildVocalSnippet', () => {
     expect(lipActivationTotalAt(snippet, 0.13)).toBeLessThanOrEqual(1.06);
   });
 
-  it('keeps high UI intensity capped before Loom3 playback scaling', () => {
+  it('keeps high UI intensity capped before Embody playback scaling', () => {
     const snippet = buildVocalSnippet(
       [
         { visemeId: CANONICAL_VISEMES.Ah as any, offsetMs: 0, durationMs: 160 },

@@ -36,7 +36,7 @@ export interface NormalizedAzureViseme {
   time: number; // seconds
 }
 
-// Map Azure/SAPI viseme IDs (0-21) to the installed loom3 canonical viseme indices.
+// Map Azure/SAPI viseme IDs (0-21) to the installed embody canonical viseme indices.
 //
 // Lossy Azure groups are intentional and should stay documented here:
 // - Azure 1 merges AE/AX/AH. We default to AE because Azure ID 2 covers the wider AA/Ah shape.

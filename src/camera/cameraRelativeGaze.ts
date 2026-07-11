@@ -3,7 +3,7 @@ import {
   computeCameraRelativeGazeOffset,
   type CameraRelativeGazeOffset,
   type CameraRelativeGazeOptions,
-} from '@lovelace_lol/loom3';
+} from '@lovelace_lol/embody';
 
 export type CameraRelativeGazeController = {
   camera: THREE.Camera;

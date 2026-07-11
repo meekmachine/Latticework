@@ -32,7 +32,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@lovelace_lol/loom3": "^1.0.38",
+    "@lovelace_lol/embody": "git+https://github.com/meekmachine/embody.git#a8a12aa502c799c73714dd309db92fe052183d74",
     "effect": "^3.19.14",
     "most-subject": "^6.0.0",
     "rxjs": "^7.8.2",

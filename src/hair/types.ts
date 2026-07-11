@@ -210,7 +210,7 @@ export type HairContext = {
 };
 
 /**
- * Runtime morph target direction mapping (mirrors loom3 HairMorphTargetsConfig).
+ * Runtime morph target direction mapping (mirrors embody HairMorphTargetsConfig).
  * Single-morph slots use a plain morph key string.
  * headUp/headDown are multi-morph dicts mapping morphKey → intensity.
  */

@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { VISEME_JAW_AMOUNTS, VISEME_KEYS } from '@lovelace_lol/loom3';
+import { VISEME_JAW_AMOUNTS, VISEME_KEYS } from '@lovelace_lol/embody';
 import { azureVisemesToTimeline, mapAzureVisemeIdToCC4 } from '../azureVisemeMapping';
 import { getJawAmountForViseme, VisemeMapper } from '../VisemeMapper';
 import { CANONICAL_VISEMES } from '../canonicalVisemes';
 
 describe('canonical viseme mapping', () => {
-  it('resolves indices from the installed loom3 15-slot viseme order', () => {
+  it('resolves indices from the installed embody 15-slot viseme order', () => {
     expect(VISEME_KEYS).toHaveLength(15);
     expect(CANONICAL_VISEMES.B_M_P).toBe(VISEME_KEYS.indexOf('B_M_P'));
     expect(CANONICAL_VISEMES.Ah).toBe(VISEME_KEYS.indexOf('Ah'));
     expect(CANONICAL_VISEMES.F_V).toBe(VISEME_KEYS.indexOf('F_V'));
   });
 
-  it('reads jaw activation from loom3 canonical defaults', () => {
+  it('reads jaw activation from embody canonical defaults', () => {
     expect(getJawAmountForViseme(CANONICAL_VISEMES.B_M_P)).toBe(VISEME_JAW_AMOUNTS[CANONICAL_VISEMES.B_M_P]);
     expect(getJawAmountForViseme(CANONICAL_VISEMES.Ah)).toBe(VISEME_JAW_AMOUNTS[CANONICAL_VISEMES.Ah]);
   });

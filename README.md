@@ -185,7 +185,7 @@ the package.
 
 ## Release Flow
 
-Publishing mirrors the Loom3-style tag/release flow. The checked-in
+Publishing mirrors the Embody-style tag/release flow. The checked-in
 `package.json` version is a baseline only; the publish workflow resolves the
 actual release version from an existing `vX.Y.Z` tag or from the latest npm
 version, then bumps the patch version in the CI workspace before publishing.

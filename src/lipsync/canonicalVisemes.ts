@@ -1,4 +1,4 @@
-import { VISEME_KEYS } from '@lovelace_lol/loom3';
+import { VISEME_KEYS } from '@lovelace_lol/embody';
 
 type CanonicalVisemeSlots = {
   AE: number;
