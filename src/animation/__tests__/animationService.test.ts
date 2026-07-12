@@ -659,7 +659,7 @@ describe('AnimationService', () => {
       });
     });
 
-    it('merges duplicate runtime viseme morph bindings before Loom3 clip creation', async () => {
+    it('merges duplicate runtime viseme morph bindings before Embody clip creation', async () => {
       (mockHost as any).getProfile = vi.fn(() => ({
         visemeKeys: [
           'V_Wide',
@@ -790,7 +790,7 @@ describe('AnimationService', () => {
       expect(states[states.length - 1]?.loopDirection).toBe(-1);
     });
 
-    it('should fail fast instead of polling when Loom3 clip streams are missing', async () => {
+    it('should fail fast instead of polling when Embody clip streams are missing', async () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
       let resolveFinished = () => {};
       const handle = {
@@ -829,7 +829,7 @@ describe('AnimationService', () => {
       expect(handle.stop).toHaveBeenCalled();
       expect(mockHost.cleanupSnippet as any).toHaveBeenCalledWith('missing_stream');
       expect(service.getState().context.animations[0].isPlaying).toBe(false);
-      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Loom3 clip event streams are required'));
+      expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('Embody clip event streams are required'));
 
       consoleError.mockRestore();
     });
@@ -869,7 +869,7 @@ describe('AnimationService', () => {
       });
     });
 
-    it('preserves Loom3 baked channel metadata in clip and state snapshots', () => {
+    it('preserves Embody baked channel metadata in clip and state snapshots', () => {
       const bakedEngine = {
         getAnimationClips: vi.fn(() => [{
           name: 'Idle',
@@ -989,7 +989,7 @@ describe('AnimationService', () => {
       });
     });
 
-    it('replays the requested blend mode while preserving Loom3 effective blend state', () => {
+    it('replays the requested blend mode while preserving Embody effective blend state', () => {
       const bakedHandle = {
         getState: vi.fn(() => ({
           name: 'Idle',

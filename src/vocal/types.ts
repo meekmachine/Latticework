@@ -2,7 +2,7 @@
  * Vocal Agency Types
  *
  * Type definitions for lip sync and vocal animation.
- * Uses the canonical 15-slot viseme order exported by @lovelace_lol/loom3.
+ * Uses the canonical 15-slot viseme order exported by @lovelace_lol/embody.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────

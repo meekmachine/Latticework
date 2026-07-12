@@ -1,18 +1,18 @@
 # Animation Agency
 
 The Animation agency is LoomLarge's UI and orchestration adapter for reusable
-Loom3 animation clips. LoomLarge owns snippet loading, metadata, controls, and
-React-facing event streams. Loom3 owns runtime playback, mixer timing, looping,
+Embody animation clips. LoomLarge owns snippet loading, metadata, controls, and
+React-facing event streams. Embody owns runtime playback, mixer timing, looping,
 scrubbing, keyframe detection, and completion.
 
 There is no local animation runtime, scheduler polling loop, or
 `requestAnimationFrame` tick in LoomLarge. Snippet playback is started through a
-Loom3 `ClipHandle`, and UI state is updated from the clip event stream exposed
+Embody `ClipHandle`, and UI state is updated from the clip event stream exposed
 by that handle.
 
 ## Runtime Ownership
 
-### Loom3 owns
+### Embody owns
 
 - Building mixer clips from AU, viseme, morph, and bone curves.
 - Advancing clip time inside the Three.js mixer update loop.
@@ -24,7 +24,7 @@ by that handle.
 
 - Loading bundled snippets and user-authored JSON.
 - Normalizing snippet metadata for the editor UI.
-- Mapping UI controls to Loom3 clip parameters.
+- Mapping UI controls to Embody clip parameters.
 - Publishing RxJS observables for React components.
 - Holding lightweight UI state such as current time, loop state, and selected
   snippet parameters.
@@ -33,20 +33,20 @@ by that handle.
 
 | File | Role |
 | --- | --- |
-| `animationService.ts` | Public service API. Creates Loom3 clip handles and adapts their event stream into UI state. |
+| `animationService.ts` | Public service API. Creates Embody clip handles and adapts their event stream into UI state. |
 | `animationEvents.ts` | Event and UI-state types for the RxJS stream surface. |
-| `types.ts` | LoomLarge-facing animation types and Loom3 type re-exports. |
+| `types.ts` | LoomLarge-facing animation types and Embody type re-exports. |
 | `snippetPreloader.ts` | Bundled snippet loading helpers. |
 | `snippets/` | Bundled AU, viseme, and eye/head snippets. |
 
 ## Service API
 
-Create the service with a Loom3 engine instance:
+Create the service with a Embody engine instance:
 
 ```typescript
 import { createAnimationService } from './animationService';
 
-const animationService = createAnimationService(loom3);
+const animationService = createAnimationService(embody);
 ```
 
 Load or schedule snippets:
@@ -82,17 +82,17 @@ animationService.setSnippetIntensityScale(name, 0.8);
 animationService.setSnippetLoopMode(name, 'once');
 ```
 
-The service delegates runtime work to Loom3:
+The service delegates runtime work to Embody:
 
 ```typescript
-const handle = loom3.buildClip(snippetName, curves, options);
+const handle = embody.buildClip(snippetName, curves, options);
 handle.subscribe((event) => {
   // keyframe, loop, seek, completed
 });
 handle.play();
 ```
 
-If Loom3 does not provide `ClipHandle.subscribe()`, snippet playback fails fast.
+If Embody does not provide `ClipHandle.subscribe()`, snippet playback fails fast.
 The service does not fall back to polling because polling would recreate a
 second runtime in LoomLarge.
 
@@ -133,7 +133,7 @@ function SnippetRow({ name }: { name: string }) {
 ## Timing Model
 
 Snippet current time is not calculated by a LoomLarge frame loop. It is copied
-from Loom3 stream events:
+from Embody stream events:
 
 - `keyframe` events update UI time and publish `KEYFRAME_COMPLETED`.
 - `loop` events update iteration state and publish `SNIPPET_LOOPED`.
@@ -146,14 +146,14 @@ runtime clock.
 
 ## Baked Animations
 
-Baked model animations still use Loom3's baked animation API
+Baked model animations still use Embody's baked animation API
 (`playAnimation`, `pauseAnimation`, `resumeAnimation`, `stopAnimation`,
 `seekAnimation`, and parameter setters). LoomLarge stores the editor-facing
 state and emits RxJS events when the user starts, stops, pauses, seeks, or
 changes parameters.
 
 No baked-animation progress interval is created by this agency. Continuous
-playhead advancement belongs to Loom3; LoomLarge only emits explicit state and
+playhead advancement belongs to Embody; LoomLarge only emits explicit state and
 seek/scrub events.
 
 ## Testing
@@ -162,9 +162,9 @@ Primary tests live in `__tests__/animationService.test.ts`.
 
 The important behavior to preserve is:
 
-- Snippet scheduling creates Loom3 clip handles.
+- Snippet scheduling creates Embody clip handles.
 - Playback requires `ClipHandle.subscribe()`.
 - Keyframe, loop, seek, and completion events update UI state through streams.
-- Pausing, seeking, parameter changes, and stop cleanup call Loom3 handles
+- Pausing, seeking, parameter changes, and stop cleanup call Embody handles
   directly.
 - No service test should rely on polling or a local animation frame runtime.

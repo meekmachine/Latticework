@@ -6,7 +6,7 @@
  *
  * Key features:
  * - Viseme curves (indices 0-14) with eased envelope shoulders
- * - Explicit AU26 jaw curve using loom3 viseme jaw amounts
+ * - Explicit AU26 jaw curve using embody viseme jaw amounts
  * - snippetCategory: "combined" to support both viseme and AU curves
  *
  * Reference: lipsync_hello.json, lipsync_world.json

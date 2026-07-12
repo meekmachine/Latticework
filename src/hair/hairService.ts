@@ -2,13 +2,13 @@
  * Hair Service
  *
  * Service layer for managing hair customization.
- * Bridges the XState machine with LoomLargeThree for rendering updates.
+ * Bridges the XState machine with Embody for rendering updates.
  * Part of the latticework agency architecture.
  *
  * NOTE: This service is engine-agnostic - it does not import Three.js.
- * All rendering operations are delegated to LoomLargeThree.
+ * All rendering operations are delegated to Embody.
  *
- * Physics is handled by LoomLargeThree - this service just manages config/state.
+ * Physics is handled by Embody - this service just manages config/state.
  */
 
 import { createActor } from 'xstate';
@@ -22,20 +22,20 @@ import {
   type HairPhysicsRuntimeConfig,
   type HairPhysicsUIConfig,
 } from './types';
-import type { LoomLargeThree } from '@lovelace_lol/loom3';
+import type { Embody } from '@lovelace_lol/embody';
 
 export class HairService {
   private actor: ReturnType<typeof createActor<typeof hairMachine>>;
   private objects: HairObjectRef[] = [];
   private hairMeshNames: string[] = [];
   private subscribers: Set<(state: HairState) => void> = new Set();
-  private engine: LoomLargeThree | null = null;
+  private engine: Embody | null = null;
 
   // Physics config (synced to engine)
   private physicsConfig: HairPhysicsRuntimeConfig = { ...DEFAULT_HAIR_PHYSICS_CONFIG };
   private physicsEnabled = DEFAULT_HAIR_PHYSICS_ENABLED;
 
-  constructor(engine?: LoomLargeThree) {
+  constructor(engine?: Embody) {
     this.actor = createActor(hairMachine);
     this.engine = engine || null;
 
@@ -65,7 +65,7 @@ export class HairService {
 
   /**
    * Register hair/eyebrow objects from the scene
-   * Delegates all Three.js operations to LoomLargeThree
+   * Delegates all Three.js operations to Embody
    *
    * NOTE: Does NOT apply colors - preserves whatever the model has.
    * The UI will show default values but won't change the actual hair color
@@ -110,7 +110,7 @@ export class HairService {
   }
 
   /**
-   * Apply the current state to the scene via LoomLargeThree
+   * Apply the current state to the scene via Embody
    * No direct Three.js manipulation - all operations delegated to engine
    */
   private applyStateToScene(state: HairState) {

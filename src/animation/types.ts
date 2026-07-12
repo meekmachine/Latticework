@@ -4,20 +4,20 @@ import type {
   TransitionHandle,
   ClipOptions,
   ClipHandle,
-  Loom3,
+  Embody,
   MixerLoopMode,
   AnimationPlayOptions,
   AnimationState,
-} from '@lovelace_lol/loom3';
+} from '@lovelace_lol/embody';
 
-// Re-export from loom3 for convenience
+// Re-export from embody for convenience
 export type { ClipOptions, ClipHandle, MixerLoopMode };
 
 /**
- * Engine interface - Loom3 implements this directly.
+ * Engine interface - Embody implements this directly.
  * Used by animation schedulers and services.
  */
-export type Engine = Loom3;
+export type Engine = Embody;
 
 /**
  * Easing function types for animation interpolation.
@@ -208,7 +208,7 @@ export type NormalizedSnippet = {
   snippetPriority: number;
   snippetBlendMode: 'replace' | 'additive';  // Blend mode for AU combination
   snippetJawScale: number;  // Jaw bone activation multiplier for viseme snippets
-  autoVisemeJaw?: boolean;  // Explicitly enable/disable Loom3 auto-generated viseme jaw
+  autoVisemeJaw?: boolean;  // Explicitly enable/disable Embody auto-generated viseme jaw
   snippetBalance: number;  // Global L/R balance for bilateral AUs (-1 to +1)
   snippetBalanceMap: Record<string, number>;  // Per-AU balance overrides
   snippetEasing: EasingType;  // Easing function for keyframe interpolation

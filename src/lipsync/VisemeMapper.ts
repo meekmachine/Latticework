@@ -1,11 +1,11 @@
 /**
  * VisemeMapper
- * Maps phonemes to the canonical 15-slot viseme order used by loom3.
- * Numeric indices are resolved from @lovelace_lol/loom3 VISEME_KEYS at runtime.
+ * Maps phonemes to the canonical 15-slot viseme order used by embody.
+ * Numeric indices are resolved from @lovelace_lol/embody VISEME_KEYS at runtime.
  */
 
 import type { VisemeID, PhonemeMapping } from './types';
-import { VISEME_JAW_AMOUNTS } from '@lovelace_lol/loom3';
+import { VISEME_JAW_AMOUNTS } from '@lovelace_lol/embody';
 import { CANONICAL_VISEMES } from './canonicalVisemes';
 
 /**
